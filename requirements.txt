@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+qdrant-client
+boto3
+python-dotenv
+pydantic
+requests
+tqdm
+langchain
