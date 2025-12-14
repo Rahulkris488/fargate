@@ -4,13 +4,9 @@ import os
 
 REGION = os.getenv("AWS_REGION", "ap-southeast-2")
 
-# UPDATED EMBEDDING MODEL
-EMBED_MODEL = os.getenv("BEDROCK_EMBED_MODEL", "amazon.titan-embed-text-v2:0")
-
-LLM_MODEL = os.getenv(
-    "BEDROCK_LLM_MODEL",
-    "anthropic.claude-3-sonnet-20240229-v1:0"
-)
+# 🔥 Correct models for ap-southeast-2
+EMBED_MODEL = "amazon.titan-embed-text-v2:0"
+LLM_MODEL = "anthropic.claude-3-sonnet-20240229-v1:0"
 
 client = boto3.client("bedrock-runtime", region_name=REGION)
 
