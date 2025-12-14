@@ -2,6 +2,9 @@ from fastapi import UploadFile
 from app.qdrant_client import client
 from app.embeddings import embed_text, llm
 
+# ---------------------------
+# RAG ANSWER FUNCTION (MISSING EARLIER)
+# ---------------------------
 async def rag_answer(course_id: int, question: str):
     query_emb = embed_text(question)
 
@@ -28,7 +31,9 @@ async def rag_answer(course_id: int, question: str):
 
     return llm(prompt)
 
-
+# ---------------------------
+# INGEST FILE FUNCTION (ALREADY CORRECT)
+# ---------------------------
 async def ingest_file(course_id: int, chapter_id: int, file: UploadFile):
     content = await file.read()
     text = content.decode("utf-8", errors="ignore")
