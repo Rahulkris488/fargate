@@ -4,9 +4,9 @@ import os
 
 REGION = os.getenv("AWS_REGION", "ap-southeast-2")
 
-# 🔥 Correct models for ap-southeast-2
+# Correct Bedrock models for ap-southeast-2
 EMBED_MODEL = "amazon.titan-embed-text-v2:0"
-LLM_MODEL = "anthropic.claude-3-sonnet-20240229-v1:0"
+LLM_MODEL = "anthropic.claude-3-haiku-20240307-v1:0"
 
 client = boto3.client("bedrock-runtime", region_name=REGION)
 
@@ -31,5 +31,6 @@ def llm(prompt: str):
         modelId=LLM_MODEL,
         body=json.dumps(payload)
     )
+
     data = json.loads(resp["body"].read())
     return data["content"][0]["text"]
