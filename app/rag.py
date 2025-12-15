@@ -21,20 +21,20 @@ async def rag_answer(course_id: int, question: str):
 
     # ---------- Query Qdrant ----------
     try:
-        results = client.search(
+        results = client.query_points(
             collection_name=collection,
-            query_vector=query_emb,
+            query=query_emb,
             limit=5
         )
-        print(f"[RAG] Qdrant returned {len(results)} results")
+        print(f"[RAG] Qdrant returned {len(results.points)} results")
     except Exception as e:
         print(f"[RAG][ERROR] Qdrant search failed: {e}")
         raise
 
     # ---------- Extract Context ----------
     context_list = []
-    for r in results:
-        text_chunk = r.payload.get("text", "")
+    for p in results.points:
+        text_chunk = p.payload.get("text", "")
         context_list.append(text_chunk)
 
     context = "\n\n".join(context_list)
@@ -60,7 +60,7 @@ Answer clearly and simply.
     return answer
 
 # =====================================================
-# INGESTION (WITH DEBUG LOGS + FIXED UPSERT FORMAT)
+# INGESTION (WITH DEBUG LOGS)
 # =====================================================
 async def ingest_file(course_id: int, chapter_id: int, file: UploadFile):
 
@@ -88,7 +88,6 @@ async def ingest_file(course_id: int, chapter_id: int, file: UploadFile):
             emb = embed_text(chunk)
             print(f"[INGEST] Embedding generated for chunk #{idx}")
 
-            # Correct Qdrant format
             points.append({
                 "id": idx,
                 "vector": emb,
