@@ -4,9 +4,9 @@ import os
 
 REGION = os.getenv("AWS_REGION", "ap-southeast-2")
 
-# Models for ap-southeast-2
+# ---- ACTIVE Bedrock Models ----
 EMBED_MODEL = "amazon.titan-embed-text-v2:0"
-LLM_MODEL = "amazon.titan-text-lite-v2:0"   # <-- FIXED NEW MODEL
+LLM_MODEL   = "amazon.titan-text-lite-v2:0"
 
 print(f"[INIT] embeddings.py loaded. REGION={REGION}")
 print(f"[INIT] EMBED_MODEL={EMBED_MODEL}")
@@ -14,12 +14,16 @@ print(f"[INIT] LLM_MODEL={LLM_MODEL}")
 
 client = boto3.client("bedrock-runtime", region_name=REGION)
 
+# =====================================================
+# EMBEDDINGS
+# =====================================================
 def embed_text(text: str):
     print("\n[EMBED] Called embed_text()")
-    print(f"[EMBED] Input text length: {len(text)}")
+    print(f"[EMBED] Model: {EMBED_MODEL}")
+    print(f"[EMBED] Input length: {len(text)}")
 
     payload = {"inputText": text}
-    print(f"[EMBED] Payload: {payload}")
+    print(f"[EMBED] Payload JSON: {json.dumps(payload)}")
 
     try:
         resp = client.invoke_model(
@@ -28,19 +32,22 @@ def embed_text(text: str):
         )
         print("[EMBED] Bedrock API call succeeded")
     except Exception as e:
-        print(f"[EMBED][ERROR] Bedrock embed model error: {e}")
+        print(f"[EMBED][ERROR] Embedding model failure: {e}")
         raise
 
     data = json.loads(resp["body"].read())
-    print(f"[EMBED] Response keys: {list(data.keys())}")
 
     emb = data["embedding"]
     print(f"[EMBED] Embedding length: {len(emb)}")
 
     return emb
 
+# =====================================================
+# LLM (TEXT GENERATION)
+# =====================================================
 def llm(prompt: str):
     print("\n[LLM] Called llm()")
+    print(f"[LLM] Using model: {LLM_MODEL}")
     print(f"[LLM] Prompt length: {len(prompt)}")
 
     payload = {
@@ -52,7 +59,7 @@ def llm(prompt: str):
         }
     }
 
-    print(f"[LLM] Titan Payload: {payload}")
+    print(f"[LLM] Payload JSON: {json.dumps(payload)}")
 
     try:
         resp = client.invoke_model(
@@ -61,13 +68,18 @@ def llm(prompt: str):
         )
         print("[LLM] Bedrock API call succeeded")
     except Exception as e:
-        print(f"[LLM][ERROR] Titan LLM model error: {e}")
+        print(f"[LLM][ERROR] LLM model failure: {e}")
+        print("[LLM][DEBUG]: Incorrect modelId or deprecated model")
         raise
 
-    data = json.loads(resp["body"].read())
-    print(f"[LLM] Response keys: {list(data.keys())}")
-
-    answer = data["results"][0]["outputText"]
-    print("[LLM] Extracted LLM text successfully")
+    try:
+        data = json.loads(resp["body"].read())
+        answer = data["results"][0]["outputText"]
+        print("[LLM] Extracted outputText successfully")
+    except Exception as e:
+        print(f"[LLM][ERROR] Failed parsing response: {e}")
+        print("[LLM][DEBUG] RAW RESPONSE:")
+        print(resp)
+        raise
 
     return answer

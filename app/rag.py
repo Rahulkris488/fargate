@@ -3,7 +3,7 @@ from app.qdrant_client import client
 from app.embeddings import embed_text, llm
 
 # =====================================================
-# RAG ANSWER (WITH DEBUG LOGS)
+# RAG ANSWER
 # =====================================================
 async def rag_answer(course_id: int, question: str):
 
@@ -42,7 +42,7 @@ async def rag_answer(course_id: int, question: str):
 
     # ---------- Build LLM Prompt ----------
     prompt = f"""
-You are a Moodle assistant. Use ONLY this context:
+You are a Moodle assistant. Use ONLY the following context to answer:
 
 CONTEXT:
 {context}
@@ -50,7 +50,7 @@ CONTEXT:
 QUESTION:
 {question}
 
-Answer clearly and simply.
+Reply clearly and simply.
     """
 
     print("[RAG] Sending prompt to LLM")
@@ -60,7 +60,7 @@ Answer clearly and simply.
     return answer
 
 # =====================================================
-# INGESTION (WITH DEBUG LOGS)
+# INGESTION
 # =====================================================
 async def ingest_file(course_id: int, chapter_id: int, file: UploadFile):
 
