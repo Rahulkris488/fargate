@@ -4,9 +4,9 @@ import os
 
 REGION = os.getenv("AWS_REGION", "ap-southeast-2")
 
-# Models for ap-southeast-2
+# Titan models (FREE — NO MARKETPLACE SUBSCRIPTION REQUIRED)
 EMBED_MODEL = "amazon.titan-embed-text-v2:0"
-LLM_MODEL = "anthropic.claude-3-sonnet-20240229-v1:0"
+LLM_MODEL = "amazon.titan-text-lite-v1"
 
 print(f"[INIT] embeddings.py loaded. REGION={REGION}")
 print(f"[INIT] EMBED_MODEL={EMBED_MODEL}")
@@ -14,6 +14,9 @@ print(f"[INIT] LLM_MODEL={LLM_MODEL}")
 
 client = boto3.client("bedrock-runtime", region_name=REGION)
 
+# -----------------------------------------------------------
+# EMBEDDING FUNCTION (Titan Embeddings)
+# -----------------------------------------------------------
 def embed_text(text: str):
     print("\n[EMBED] Called embed_text()")
     print(f"[EMBED] Input text length: {len(text)}")
@@ -44,16 +47,23 @@ def embed_text(text: str):
     return emb
 
 
+# -----------------------------------------------------------
+# LLM FUNCTION (Titan Text Lite — FREE LLM)
+# -----------------------------------------------------------
 def llm(prompt: str):
     print("\n[LLM] Called llm()")
     print(f"[LLM] Prompt length: {len(prompt)}")
 
     payload = {
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 400,
-        "temperature": 0.4,
-        "messages": [{"role": "user", "content": prompt}]
+        "inputText": prompt,
+        "textGenerationConfig": {
+            "maxTokenCount": 400,
+            "temperature": 0.4,
+            "topP": 0.9
+        }
     }
+
+    print(f"[LLM] Titan Payload: {payload}")
 
     try:
         resp = client.invoke_model(
@@ -62,7 +72,7 @@ def llm(prompt: str):
         )
         print("[LLM] Bedrock API call succeeded")
     except Exception as e:
-        print(f"[LLM][ERROR] Bedrock LLM model error: {e}")
+        print(f"[LLM][ERROR] Titan LLM model error: {e}")
         raise
 
     try:
@@ -73,10 +83,10 @@ def llm(prompt: str):
         raise
 
     try:
-        answer = data["content"][0]["text"]
-        print("[LLM] Extracted LLM text successfully")
+        answer = data["results"][0]["outputText"]
+        print("[LLM] Extracted Titan text successfully")
     except Exception as e:
-        print(f"[LLM][ERROR] Missing text field: {e}")
+        print(f"[LLM][ERROR] Missing outputText: {e}")
         raise
 
     return answer

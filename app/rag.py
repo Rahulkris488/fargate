@@ -21,20 +21,20 @@ async def rag_answer(course_id: int, question: str):
 
     # ---------- Query Qdrant ----------
     try:
-        results = client.query_points(
+        results = client.search(
             collection_name=collection,
-            query=query_emb,
+            query_vector=query_emb,
             limit=5
         )
-        print(f"[RAG] Qdrant returned {len(results.points)} results")
+        print(f"[RAG] Qdrant returned {len(results)} results")
     except Exception as e:
         print(f"[RAG][ERROR] Qdrant search failed: {e}")
         raise
 
     # ---------- Extract Context ----------
     context_list = []
-    for p in results.points:
-        text_chunk = p.payload.get("text", "")
+    for r in results:
+        text_chunk = r.payload.get("text", "")
         context_list.append(text_chunk)
 
     context = "\n\n".join(context_list)
@@ -58,7 +58,6 @@ Answer clearly and simply.
 
     print("[RAG] LLM response received")
     return answer
-
 
 # =====================================================
 # INGESTION (WITH DEBUG LOGS + FIXED UPSERT FORMAT)
@@ -89,7 +88,7 @@ async def ingest_file(course_id: int, chapter_id: int, file: UploadFile):
             emb = embed_text(chunk)
             print(f"[INGEST] Embedding generated for chunk #{idx}")
 
-            # Qdrant requires *proper point dictionary format*:
+            # Correct Qdrant format
             points.append({
                 "id": idx,
                 "vector": emb,
