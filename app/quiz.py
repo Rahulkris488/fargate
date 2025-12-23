@@ -1,16 +1,25 @@
 from app.embeddings import llm
 
-def generate_quiz(course_id: int, topic: str, count: int):
+def generate_quiz(course_id: int, topic: str, count: int, content: str | None):
+    if not content:
+        raise ValueError("No content provided for quiz generation")
+
     prompt = f"""
-Generate {count} high-quality multiple-choice questions
-on the topic: {topic}
+You are an expert educator.
 
-Each question must have:
+Using ONLY the content below, generate {count} high-quality MCQs.
+
+Rules:
+- Each question must be based directly on the content
 - 4 options (A, B, C, D)
-- Correct answer labelled
-- Short explanation
+- One correct answer
+- No placeholders
+- Output STRICT JSON array only
 
-Format as JSON list.
-    """
+CONTENT:
+\"\"\"
+{content[:6000]}
+\"\"\"
+"""
 
     return llm(prompt)

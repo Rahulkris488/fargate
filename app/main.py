@@ -11,8 +11,12 @@ class ChatRequest(BaseModel):
 
 class QuizRequest(BaseModel):
     course_id: int
+    chapter_id: int | None = None
     topic: str
-    count: int = 5
+    num_questions: int = 5
+    difficulty: str | None = "medium"
+    content: str | None = None
+
 
 @app.get("/")
 def root():
@@ -29,8 +33,14 @@ async def chat(req: ChatRequest):
 
 @app.post("/generate-quiz")
 def quiz(req: QuizRequest):
-    quiz = generate_quiz(req.course_id, req.topic, req.count)
+    quiz = generate_quiz(
+        course_id=req.course_id,
+        topic=req.topic,
+        count=req.num_questions,
+        content=req.content
+    )
     return {"quiz": quiz}
+
 
 @app.post("/ingest")
 async def ingest(

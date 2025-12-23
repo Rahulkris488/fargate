@@ -6,43 +6,30 @@ from app.embeddings import embed_text, llm
 # RAG ANSWER
 # =====================================================
 async def rag_answer(course_id: int, question: str):
-
-    print("\n[RAG] rag_answer() START")
+    print("\n[RAG] START")
     print(f"[RAG] course_id={course_id}")
     print(f"[RAG] question={question}")
 
-    # ---------- Generate Embedding ----------
     query_emb = embed_text(question)
-    print(f"[RAG] Embedding generated, length={len(query_emb)}")
+    print(f"[RAG] Embedding generated ({len(query_emb)})")
 
-    # ---------- Choose Collection ----------
     collection = f"course_{course_id}_chunks"
-    print(f"[RAG] Searching in collection: {collection}")
 
-    # ---------- Query Qdrant ----------
     try:
         results = client.query_points(
             collection_name=collection,
             query=query_emb,
             limit=5
         )
-        print(f"[RAG] Qdrant returned {len(results.points)} results")
     except Exception as e:
-        print(f"[RAG][ERROR] Qdrant search failed: {e}")
+        print(f"[RAG ERROR] Qdrant query failed: {e}")
         raise
 
-    # ---------- Extract Context ----------
-    context_list = []
-    for p in results.points:
-        text_chunk = p.payload.get("text", "")
-        context_list.append(text_chunk)
+    context = "\n\n".join(p.payload.get("text", "") for p in results.points)
+    print(f"[RAG] Context size = {len(context)}")
 
-    context = "\n\n".join(context_list)
-    print(f"[RAG] Context length: {len(context)}")
-
-    # ---------- Build LLM Prompt ----------
     prompt = f"""
-You are a Moodle assistant. Use ONLY the following context to answer:
+You are an AI Moodle assistant. Use ONLY the context below.
 
 CONTEXT:
 {context}
@@ -50,67 +37,41 @@ CONTEXT:
 QUESTION:
 {question}
 
-Reply clearly and simply.
+Respond clearly and concisely.
     """
 
-    print("[RAG] Sending prompt to LLM")
     answer = llm(prompt)
-
-    print("[RAG] LLM response received")
+    print("[RAG] LLM response OK")
     return answer
 
+
 # =====================================================
-# INGESTION
+# INGEST
 # =====================================================
 async def ingest_file(course_id: int, chapter_id: int, file: UploadFile):
+    print("\n[INGEST] START")
+    print(f"[INGEST] course_id={course_id}, chapter_id={chapter_id}, file={file.filename}")
 
-    print("\n[INGEST] ingest_file() START")
-    print(f"[INGEST] course_id={course_id}, chapter_id={chapter_id}")
-    print(f"[INGEST] filename={file.filename}")
+    raw = await file.read()
+    text = raw.decode("utf-8", errors="ignore")
 
-    # ---------- Read File ----------
-    content = await file.read()
-    text = content.decode("utf-8", errors="ignore")
-    print(f"[INGEST] File size={len(text)} chars")
-
-    # ---------- Create Chunks ----------
     chunks = text.split("\n\n")
-    print(f"[INGEST] Total chunks found: {len(chunks)}")
-
     points = []
 
-    # ---------- Process Chunks ----------
     for idx, chunk in enumerate(chunks):
         if chunk.strip():
-
-            print(f"[INGEST] Processing chunk #{idx}, length={len(chunk)}")
-
             emb = embed_text(chunk)
-            print(f"[INGEST] Embedding generated for chunk #{idx}")
-
             points.append({
                 "id": idx,
                 "vector": emb,
                 "payload": {
                     "text": chunk,
-                    "course_id": course_id,
-                    "chapter_id": chapter_id
+                    "chapter_id": chapter_id,
+                    "course_id": course_id
                 }
             })
 
-    # ---------- Upsert Into Qdrant ----------
     collection = f"course_{course_id}_chunks"
-    print(f"[INGEST] Upserting into collection: {collection}")
-    print(f"[INGEST] Total points to upsert: {len(points)}")
-
-    try:
-        client.upsert(
-            collection_name=collection,
-            points=points
-        )
-        print("[INGEST] Qdrant upsert successful")
-    except Exception as e:
-        print(f"[INGEST][ERROR] Qdrant upsert failed: {e}")
-        raise
+    client.upsert(collection_name=collection, points=points)
 
     return {"chunks": len(points)}
