@@ -1,28 +1,27 @@
+import logging
 from app.embeddings import llm
 
-def generate_quiz(course_id: int, topic: str, count: int, content: str):
-    print("\n[QUIZ] START")
-    print(f"[QUIZ] course_id={course_id}")
-    print(f"[QUIZ] topic={topic}")
-    print(f"[QUIZ] count={count}")
-    print(f"[QUIZ] content length={len(content) if content else 0}")
+logger = logging.getLogger(__name__)
 
-    if not content or len(content.strip()) < 50:
-        return {
-            "error": "Content too short or missing for quiz generation"
-        }
+def generate_quiz(course_id: int, topic: str, count: int, content: str):
+    if not content:
+        raise ValueError("Content is required for quiz generation")
+
+    logger.info("[QUIZ] Generating quiz")
+    logger.info(f"[QUIZ] course_id={course_id}, topic={topic}, count={count}")
+    logger.info(f"[QUIZ] content_length={len(content)}")
 
     prompt = f"""
-You are an expert educator.
+You are an expert UPSC educator.
 
-Using ONLY the content below, generate {count} multiple choice questions.
+Generate exactly {count} multiple-choice questions using ONLY the content below.
 
 Rules:
-- Each question must be strictly based on the content
-- 4 options labeled A, B, C, D
-- Clearly indicate the correct option
-- DO NOT invent facts
-- Output plain text (NOT JSON)
+- Each question must be factual
+- 4 options (A, B, C, D)
+- One correct answer
+- Output STRICT JSON ARRAY ONLY
+- No markdown, no explanation text
 
 CONTENT:
 \"\"\"
@@ -30,13 +29,4 @@ CONTENT:
 \"\"\"
 """
 
-    try:
-        result = llm(prompt)
-        print("[QUIZ] LLM success")
-        return result
-    except Exception as e:
-        print("[QUIZ ERROR]", str(e))
-        return {
-            "error": "LLM generation failed",
-            "detail": str(e)
-        }
+    return llm(prompt)

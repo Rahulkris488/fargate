@@ -1,13 +1,13 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from app.rag import rag_answer, ingest_file
+import logging
+
 from app.quiz import generate_quiz
 
-app = FastAPI()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-class ChatRequest(BaseModel):
-    course_id: int
-    question: str
+app = FastAPI()
 
 class QuizRequest(BaseModel):
     course_id: int
@@ -15,48 +15,21 @@ class QuizRequest(BaseModel):
     num_questions: int = 5
     content: str
 
-@app.get("/")
-def root():
-    return {"message": "Moodle AI Backend is running"}
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-@app.post("/chat")
-async def chat(req: ChatRequest):
-    try:
-        answer = await rag_answer(req.course_id, req.question)
-        return {"answer": answer}
-    except Exception as e:
-        print("[CHAT ERROR]", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.post("/generate-quiz")
 def quiz(req: QuizRequest):
-    print("\n[API] /generate-quiz called")
-    print(req)
-
-    result = generate_quiz(
-        course_id=req.course_id,
-        topic=req.topic,
-        count=req.num_questions,
-        content=req.content
-    )
-
-    if isinstance(result, dict) and "error" in result:
-        raise HTTPException(status_code=400, detail=result)
-
-    return {
-        "status": "ok",
-        "quiz": result
-    }
-
-@app.post("/ingest")
-async def ingest(
-    course_id: int = Form(...),
-    chapter_id: int = Form(...),
-    file: UploadFile = File(...)
-):
-    result = await ingest_file(course_id, chapter_id, file)
-    return {"message": "Ingestion successful", "detail": result}
+    try:
+        logger.info("[API] /generate-quiz called")
+        result = generate_quiz(
+            course_id=req.course_id,
+            topic=req.topic,
+            count=req.num_questions,
+            content=req.content
+        )
+        return {"quiz": result}
+    except Exception as e:
+        logger.exception("[API ERROR]")
+        raise HTTPException(status_code=500, detail=str(e))
