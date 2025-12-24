@@ -1,35 +1,67 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
-import logging
-
 from app.quiz import generate_quiz
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from app.rag import rag_answer, ingest_file
+import traceback
 
 app = FastAPI()
+
+# -----------------------------
+# MODELS
+# -----------------------------
+class ChatRequest(BaseModel):
+    course_id: int
+    question: str
 
 class QuizRequest(BaseModel):
     course_id: int
     topic: str
     num_questions: int = 5
-    content: str
+    content: str | None = None
+
+# -----------------------------
+# ROUTES
+# -----------------------------
+@app.get("/")
+def root():
+    return {"message": "Moodle AI Backend is running"}
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
+@app.post("/chat")
+async def chat(req: ChatRequest):
+    try:
+        answer = await rag_answer(req.course_id, req.question)
+        return {"answer": answer}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/generate-quiz")
 def quiz(req: QuizRequest):
     try:
-        logger.info("[API] /generate-quiz called")
-        result = generate_quiz(
+        quiz = generate_quiz(
             course_id=req.course_id,
             topic=req.topic,
             count=req.num_questions,
             content=req.content
         )
-        return {"quiz": result}
+        return {"quiz": quiz}
     except Exception as e:
-        logger.exception("[API ERROR]")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/ingest")
+async def ingest(
+    course_id: int = Form(...),
+    chapter_id: int = Form(...),
+    file: UploadFile = File(...)
+):
+    try:
+        result = await ingest_file(course_id, chapter_id, file)
+        return {"message": "Ingestion successful", "detail": result}
+    except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

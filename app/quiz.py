@@ -1,27 +1,30 @@
-import logging
 from app.embeddings import llm
 
-logger = logging.getLogger(__name__)
+def generate_quiz(
+    course_id: int,
+    topic: str,
+    count: int,
+    content: str | None
+):
+    print("\n[QUIZ] START")
+    print(f"[QUIZ] course_id={course_id}")
+    print(f"[QUIZ] topic={topic}")
+    print(f"[QUIZ] count={count}")
 
-def generate_quiz(course_id: int, topic: str, count: int, content: str):
-    if not content:
-        raise ValueError("Content is required for quiz generation")
-
-    logger.info("[QUIZ] Generating quiz")
-    logger.info(f"[QUIZ] course_id={course_id}, topic={topic}, count={count}")
-    logger.info(f"[QUIZ] content_length={len(content)}")
+    if not content or not content.strip():
+        raise ValueError("Quiz generation failed: content is empty")
 
     prompt = f"""
-You are an expert UPSC educator.
+You are an expert exam question setter.
 
-Generate exactly {count} multiple-choice questions using ONLY the content below.
+Using ONLY the content below, generate {count} MCQs.
 
 Rules:
-- Each question must be factual
+- Each question must be directly from content
 - 4 options (A, B, C, D)
-- One correct answer
-- Output STRICT JSON ARRAY ONLY
-- No markdown, no explanation text
+- Exactly ONE correct answer
+- No placeholders
+- Output STRICT JSON only
 
 CONTENT:
 \"\"\"
@@ -29,4 +32,6 @@ CONTENT:
 \"\"\"
 """
 
-    return llm(prompt)
+    response = llm(prompt)
+    print("[QUIZ] LLM response received")
+    return response
