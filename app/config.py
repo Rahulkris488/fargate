@@ -4,12 +4,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Settings:
-    AWS_REGION = os.getenv("AWS_REGION", "ap-southeast-2")
+    # LLM
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
 
-    # ✅ UPDATED – ACTIVE MODELS
-    BEDROCK_LLM_MODEL = "amazon.titan-text-lite-v1"
-    BEDROCK_EMBED_MODEL = "amazon.titan-embed-text-v1"
-
+    # Vector DB
     QDRANT_URL = os.getenv("QDRANT_URL")
 
 settings = Settings()
