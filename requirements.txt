@@ -2,9 +2,9 @@ fastapi
 uvicorn[standard]
 qdrant-client
 python-multipart
-boto3
 python-dotenv
 pydantic
 requests
-tqdm
-langchain
+groq
+sentence-transformers
+torch
