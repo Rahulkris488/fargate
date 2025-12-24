@@ -1,20 +1,24 @@
 import boto3
 import json
 import os
+from app.config import settings
 
-REGION = os.getenv("AWS_REGION", "ap-southeast-2")
+REGION = settings.AWS_REGION
 
-EMBED_MODEL = os.getenv("BEDROCK_EMBED_MODEL")
-LLM_MODEL   = os.getenv("BEDROCK_LLM_MODEL")
+EMBED_MODEL = settings.BEDROCK_EMBED_MODEL
+LLM_MODEL   = settings.BEDROCK_LLM_MODEL
 
-
-client = boto3.client("bedrock-runtime", region_name=REGION)
-
+client = boto3.client(
+    "bedrock-runtime",
+    region_name=REGION
+)
 
 # -----------------------------
 # EMBEDDINGS
 # -----------------------------
 def embed_text(text: str):
+    print("[EMBED] Using model:", EMBED_MODEL)
+
     payload = {"inputText": text}
 
     resp = client.invoke_model(
@@ -25,15 +29,17 @@ def embed_text(text: str):
     data = json.loads(resp["body"].read())
     return data["embedding"]
 
-
 # -----------------------------
-# TITAN TEXT EXPRESS LLM
+# LLM
 # -----------------------------
 def llm(prompt: str):
+    print("[LLM] Using model:", LLM_MODEL)
+    print("[LLM] Prompt length:", len(prompt))
+
     payload = {
         "inputText": prompt,
         "textGenerationConfig": {
-            "maxTokenCount": 400,
+            "maxTokenCount": 600,
             "temperature": 0.3,
             "topP": 0.9
         }

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 from app.rag import rag_answer, ingest_file
 from app.quiz import generate_quiz
@@ -11,12 +11,9 @@ class ChatRequest(BaseModel):
 
 class QuizRequest(BaseModel):
     course_id: int
-    chapter_id: int | None = None
     topic: str
     num_questions: int = 5
-    difficulty: str | None = "medium"
-    content: str | None = None
-
+    content: str
 
 @app.get("/")
 def root():
@@ -28,19 +25,32 @@ def health():
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    answer = await rag_answer(req.course_id, req.question)
-    return {"answer": answer}
+    try:
+        answer = await rag_answer(req.course_id, req.question)
+        return {"answer": answer}
+    except Exception as e:
+        print("[CHAT ERROR]", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/generate-quiz")
 def quiz(req: QuizRequest):
-    quiz = generate_quiz(
+    print("\n[API] /generate-quiz called")
+    print(req)
+
+    result = generate_quiz(
         course_id=req.course_id,
         topic=req.topic,
         count=req.num_questions,
         content=req.content
     )
-    return {"quiz": quiz}
 
+    if isinstance(result, dict) and "error" in result:
+        raise HTTPException(status_code=400, detail=result)
+
+    return {
+        "status": "ok",
+        "quiz": result
+    }
 
 @app.post("/ingest")
 async def ingest(
