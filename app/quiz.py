@@ -1,30 +1,36 @@
+import json
 from app.embeddings import llm
 
-def generate_quiz(
-    course_id: int,
-    topic: str,
-    count: int,
-    content: str | None
-):
-    print("\n[QUIZ] START")
-    print(f"[QUIZ] course_id={course_id}")
-    print(f"[QUIZ] topic={topic}")
-    print(f"[QUIZ] count={count}")
-
+def generate_quiz(course_id: int, topic: str, count: int, content: str):
     if not content or not content.strip():
-        raise ValueError("Quiz generation failed: content is empty")
+        raise ValueError("Content is empty")
 
     prompt = f"""
 You are an expert exam question setter.
 
-Using ONLY the content below, generate {count} MCQs.
+Generate EXACTLY {count} MCQs in STRICT JSON ONLY.
+NO text before or after JSON.
 
-Rules:
-- Each question must be directly from content
-- 4 options (A, B, C, D)
-- Exactly ONE correct answer
-- No placeholders
-- Output STRICT JSON only
+JSON SCHEMA:
+[
+  {{
+    "question": "string",
+    "options": {{
+      "A": "string",
+      "B": "string",
+      "C": "string",
+      "D": "string"
+    }},
+    "correct_answer": "A|B|C|D",
+    "explanation": "string"
+  }}
+]
+
+RULES:
+- Use ONLY the content below
+- One correct answer
+- No hallucination
+- No markdown
 
 CONTENT:
 \"\"\"
@@ -32,6 +38,12 @@ CONTENT:
 \"\"\"
 """
 
-    response = llm(prompt)
-    print("[QUIZ] LLM response received")
-    return response
+    raw = llm(prompt)
+
+    try:
+        data = json.loads(raw)
+        assert isinstance(data, list)
+        assert len(data) == count
+        return data
+    except Exception as e:
+        raise ValueError(f"Invalid AI output: {e}")
