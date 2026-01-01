@@ -3,7 +3,7 @@ from qdrant_client.http import models
 from app.qdrant_client import client
 from app.embeddings import embed_text, llm
 
-VECTOR_SIZE = 384  # MUST match SentenceTransformer all-MiniLM-L6-v2
+VECTOR_SIZE = 384  # MUST match embedding model
 
 # =====================================================
 # RAG ANSWER
@@ -15,25 +15,25 @@ async def rag_answer(course_id: int, question: str):
 
     collection = f"course_{course_id}_chunks"
 
-    # ---- SAFETY CHECK ----
+    # ❗ Check collection exists
     collections = [c.name for c in client.get_collections().collections]
     if collection not in collections:
         raise ValueError(
-            f"Knowledge base not found for course {course_id}. "
-            f"Please ingest course content first."
+            f"No content ingested for course {course_id}. "
+            f"Please ingest course material first."
         )
 
     query_emb = embed_text(question)
     print(f"[RAG] Embedding generated ({len(query_emb)})")
 
-    results = client.query_points(
+    results = client.search(
         collection_name=collection,
-        query=query_emb,
+        query_vector=query_emb,
         limit=5
     )
 
     context = "\n\n".join(
-        p.payload.get("text", "") for p in results.points
+        p.payload.get("text", "") for p in results
     )
 
     print(f"[RAG] Context size = {len(context)}")
@@ -65,11 +65,13 @@ async def ingest_file(course_id: int, chapter_id: int, file: UploadFile):
 
     collection = f"course_{course_id}_chunks"
 
-    # ---- CREATE COLLECTION IF MISSING ----
+    # -------------------------------------------------
+    # CREATE COLLECTION (HARD GUARANTEE)
+    # -------------------------------------------------
     collections = [c.name for c in client.get_collections().collections]
 
     if collection not in collections:
-        print(f"[INGEST] Creating collection: {collection}")
+        print(f"[INGEST] Creating collection {collection}")
 
         client.create_collection(
             collection_name=collection,
@@ -79,6 +81,9 @@ async def ingest_file(course_id: int, chapter_id: int, file: UploadFile):
             )
         )
 
+    # -------------------------------------------------
+    # READ FILE
+    # -------------------------------------------------
     raw = await file.read()
     text = raw.decode("utf-8", errors="ignore")
 
@@ -100,6 +105,9 @@ async def ingest_file(course_id: int, chapter_id: int, file: UploadFile):
             )
         )
 
+    # -------------------------------------------------
+    # UPSERT
+    # -------------------------------------------------
     client.upsert(
         collection_name=collection,
         points=points
