@@ -28,13 +28,13 @@ class ChatRequest(BaseModel):
     question: str = Field(..., min_length=3, description="Student question")
 
 class QuizRequest(BaseModel):
-    course_id: int = Field(..., gt=0, description="Moodle course ID")
+    course_id: int = Field(..., gt=0)
     topic: str = Field(..., min_length=3)
     num_questions: int = Field(default=5, ge=1, le=50)
     content: str = Field(
         ...,
-        min_length=50,
-        description="Extracted course content used to generate quiz"
+        min_length=20,
+        description="Extracted course content"
     )
 
 # -------------------------------------------------
@@ -51,10 +51,7 @@ def root():
 
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "service": "moodle-ai-backend"
-    }
+    return {"status": "ok"}
 
 # -------------------------------------------------
 # CHAT (RAG)
@@ -64,26 +61,20 @@ def health():
 async def chat(req: ChatRequest):
     try:
         logging.info(f"[CHAT] course_id={req.course_id}")
-
-        answer = await rag_answer(
-            course_id=req.course_id,
-            question=req.question
-        )
+        answer = await rag_answer(req.course_id, req.question)
 
         return {
             "status": "success",
             "answer": answer
         }
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    except Exception:
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail="Internal AI error"
-        )
+    except Exception as e:
+        # IMPORTANT: fail gracefully (do not crash backend)
+        logging.error(f"[CHAT ERROR] {e}")
+        return {
+            "status": "error",
+            "message": "Chat service unavailable. Content index mismatch."
+        }
 
 # -------------------------------------------------
 # QUIZ GENERATION
@@ -98,7 +89,7 @@ def generate_quiz_api(req: QuizRequest):
             f"count={req.num_questions}"
         )
 
-        quiz_data = generate_quiz(
+        quiz = generate_quiz(
             course_id=req.course_id,
             topic=req.topic,
             count=req.num_questions,
@@ -107,16 +98,12 @@ def generate_quiz_api(req: QuizRequest):
 
         return {
             "status": "success",
-            "count": len(quiz_data),
-            "quiz": quiz_data
+            "count": len(quiz),
+            "quiz": quiz
         }
 
-    except ValueError as e:
-        # AI output / validation / schema errors
-        raise HTTPException(
-            status_code=422,
-            detail=str(e)
-        )
+    except ValueError as ve:
+        raise HTTPException(status_code=422, detail=str(ve))
 
     except Exception:
         traceback.print_exc()
@@ -142,19 +129,12 @@ async def ingest(
             f"file={file.filename}"
         )
 
-        result = await ingest_file(
-            course_id=course_id,
-            chapter_id=chapter_id,
-            file=file
-        )
+        result = await ingest_file(course_id, chapter_id, file)
 
         return {
             "status": "success",
             "chunks": result.get("chunks", 0)
         }
-
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
     except Exception:
         traceback.print_exc()

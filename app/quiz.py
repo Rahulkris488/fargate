@@ -1,29 +1,20 @@
 import json
 from app.embeddings import llm
 
+REQUIRED_KEYS = {"question", "options", "correct_answer", "explanation"}
+OPTION_KEYS = {"A", "B", "C", "D"}
+
 def generate_quiz(course_id: int, topic: str, count: int, content: str):
-    # -----------------------------
-    # Hard validation
-    # -----------------------------
-    if course_id <= 0:
-        raise ValueError("Invalid course_id")
+    if not content or not content.strip():
+        raise ValueError("Content is empty")
 
-    if not content or len(content.strip()) < 50:
-        raise ValueError("Content is too short to generate a quiz")
-
-    if count < 1 or count > 50:
-        raise ValueError("Invalid number of questions requested")
-
-    # -----------------------------
-    # Prompt (STRICT JSON)
-    # -----------------------------
     prompt = f"""
 You are an expert exam question setter.
 
-Generate EXACTLY {count} multiple‑choice questions in STRICT JSON ONLY.
-DO NOT include any text before or after JSON.
+Generate EXACTLY {count} MCQs in STRICT JSON ONLY.
+NO text before or after JSON.
 
-JSON SCHEMA (must match exactly):
+JSON SCHEMA:
 [
   {{
     "question": "string",
@@ -39,12 +30,10 @@ JSON SCHEMA (must match exactly):
 ]
 
 RULES:
-- Use ONLY the provided content
-- Exactly ONE correct answer
-- No repetition
+- Use ONLY the content below
+- One correct answer
 - No hallucination
 - No markdown
-- No additional keys
 
 CONTENT:
 \"\"\"
@@ -54,36 +43,27 @@ CONTENT:
 
     raw = llm(prompt)
 
-    # -----------------------------
-    # Strict JSON validation
-    # -----------------------------
     try:
         data = json.loads(raw)
 
         if not isinstance(data, list):
-            raise ValueError("Quiz output is not a list")
+            raise ValueError("Quiz output must be a list")
 
         if len(data) != count:
-            raise ValueError(
-                f"Expected {count} questions, got {len(data)}"
-            )
+            raise ValueError("Quiz count mismatch")
 
-        for idx, q in enumerate(data, start=1):
-            if not isinstance(q, dict):
-                raise ValueError(f"Question {idx} is not an object")
-
-            required_keys = {"question", "options", "correct_answer", "explanation"}
-            if set(q.keys()) != required_keys:
-                raise ValueError(f"Invalid keys in question {idx}")
+        for i, q in enumerate(data):
+            if not REQUIRED_KEYS.issubset(q.keys()):
+                raise ValueError(f"Question {i+1}: missing keys")
 
             if not isinstance(q["options"], dict):
-                raise ValueError(f"Options must be object in question {idx}")
+                raise ValueError(f"Question {i+1}: options must be object")
 
-            if set(q["options"].keys()) != {"A", "B", "C", "D"}:
-                raise ValueError(f"Invalid options in question {idx}")
+            if set(q["options"].keys()) != OPTION_KEYS:
+                raise ValueError(f"Question {i+1}: options must be A–D")
 
-            if q["correct_answer"] not in {"A", "B", "C", "D"}:
-                raise ValueError(f"Invalid correct_answer in question {idx}")
+            if q["correct_answer"] not in OPTION_KEYS:
+                raise ValueError(f"Question {i+1}: invalid correct_answer")
 
         return data
 
