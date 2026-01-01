@@ -3,48 +3,103 @@ from pydantic import BaseModel, Field
 from app.quiz import generate_quiz
 from app.rag import rag_answer, ingest_file
 import traceback
+import logging
 
-app = FastAPI(title="Moodle AI Backend", version="1.0")
+# -------------------------------------------------
+# App setup
+# -------------------------------------------------
+app = FastAPI(
+    title="Moodle AI Backend",
+    version="1.0.0",
+    description="Enterprise AI backend for Moodle plugins (Quiz + Chat)"
+)
 
-# -----------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+
+# -------------------------------------------------
 # MODELS
-# -----------------------------
+# -------------------------------------------------
 
 class ChatRequest(BaseModel):
-    course_id: int = Field(..., gt=0)
-    question: str = Field(..., min_length=3)
+    course_id: int = Field(..., gt=0, description="Moodle course ID")
+    question: str = Field(..., min_length=3, description="Student question")
 
 class QuizRequest(BaseModel):
     course_id: int = Field(..., gt=0)
     topic: str = Field(..., min_length=3)
     num_questions: int = Field(default=5, ge=1, le=50)
-    content: str = Field(..., min_length=20)
+    content: str = Field(
+        ...,
+        min_length=20,
+        description="Extracted course content used to generate quiz"
+    )
 
-# -----------------------------
-# ROUTES
-# -----------------------------
+# -------------------------------------------------
+# ROOT / HEALTH
+# -------------------------------------------------
 
 @app.get("/")
 def root():
-    return {"message": "Moodle AI Backend is running"}
+    return {
+        "service": "Moodle AI Backend",
+        "status": "running",
+        "version": "1.0.0"
+    }
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "service": "moodle-ai-backend"
+    }
+
+# -------------------------------------------------
+# CHAT (RAG)
+# -------------------------------------------------
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
     try:
-        answer = await rag_answer(req.course_id, req.question)
-        return {"answer": answer}
-    except Exception as e:
+        logging.info(f"[CHAT] course_id={req.course_id}")
+
+        answer = await rag_answer(
+            course_id=req.course_id,
+            question=req.question
+        )
+
+        return {
+            "status": "success",
+            "answer": answer
+        }
+
+    except ValueError as e:
+        # User / data issue
+        raise HTTPException(status_code=400, detail=str(e))
+
+    except Exception:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Internal AI error"
+        )
+
+# -------------------------------------------------
+# QUIZ GENERATION
+# -------------------------------------------------
 
 @app.post("/generate-quiz")
 def generate_quiz_api(req: QuizRequest):
     try:
-        quiz = generate_quiz(
+        logging.info(
+            f"[QUIZ] course_id={req.course_id}, "
+            f"topic={req.topic}, "
+            f"count={req.num_questions}"
+        )
+
+        quiz_data = generate_quiz(
             course_id=req.course_id,
             topic=req.topic,
             count=req.num_questions,
@@ -53,27 +108,61 @@ def generate_quiz_api(req: QuizRequest):
 
         return {
             "status": "success",
-            "count": len(quiz),
-            "quiz": quiz
+            "count": len(quiz_data),
+            "quiz": quiz_data
         }
 
-    except ValueError as ve:
-        # AI output / validation errors
-        raise HTTPException(status_code=422, detail=str(ve))
+    except ValueError as e:
+        # Covers:
+        # - Empty content
+        # - Invalid JSON from LLM
+        # - Schema mismatch
+        raise HTTPException(
+            status_code=422,
+            detail=str(e)
+        )
 
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(
+            status_code=500,
+            detail="Quiz generation failed"
+        )
+
+# -------------------------------------------------
+# INGEST (RAG)
+# -------------------------------------------------
 
 @app.post("/ingest")
 async def ingest(
-    course_id: int = Form(...),
-    chapter_id: int = Form(...),
+    course_id: int = Form(..., gt=0),
+    chapter_id: int = Form(..., gt=0),
     file: UploadFile = File(...)
 ):
     try:
-        result = await ingest_file(course_id, chapter_id, file)
-        return {"status": "success", "detail": result}
-    except Exception as e:
+        logging.info(
+            f"[INGEST] course_id={course_id}, "
+            f"chapter_id={chapter_id}, "
+            f"file={file.filename}"
+        )
+
+        result = await ingest_file(
+            course_id=course_id,
+            chapter_id=chapter_id,
+            file=file
+        )
+
+        return {
+            "status": "success",
+            "chunks": result.get("chunks", 0)
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    except Exception:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Ingestion failed"
+        )
