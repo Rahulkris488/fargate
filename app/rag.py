@@ -3,8 +3,7 @@ from qdrant_client.http import models
 from app.qdrant_client import client
 from app.embeddings import embed_text, llm
 
-VECTOR_SIZE = 384  # MUST match embedding model
-
+VECTOR_SIZE = 384  # MUST match SentenceTransformer all-MiniLM-L6-v2
 
 # =====================================================
 # RAG ANSWER
@@ -16,11 +15,11 @@ async def rag_answer(course_id: int, question: str):
 
     collection = f"course_{course_id}_chunks"
 
-    # Ensure collection exists
+    # ---- SAFETY CHECK ----
     collections = [c.name for c in client.get_collections().collections]
     if collection not in collections:
         raise ValueError(
-            f"No knowledge base found for course {course_id}. "
+            f"Knowledge base not found for course {course_id}. "
             f"Please ingest course content first."
         )
 
@@ -66,13 +65,11 @@ async def ingest_file(course_id: int, chapter_id: int, file: UploadFile):
 
     collection = f"course_{course_id}_chunks"
 
-    # -------------------------------------------------
-    # CREATE COLLECTION IF NOT EXISTS
-    # -------------------------------------------------
+    # ---- CREATE COLLECTION IF MISSING ----
     collections = [c.name for c in client.get_collections().collections]
 
     if collection not in collections:
-        print(f"[INGEST] Creating collection {collection}")
+        print(f"[INGEST] Creating collection: {collection}")
 
         client.create_collection(
             collection_name=collection,
@@ -82,9 +79,6 @@ async def ingest_file(course_id: int, chapter_id: int, file: UploadFile):
             )
         )
 
-    # -------------------------------------------------
-    # READ FILE
-    # -------------------------------------------------
     raw = await file.read()
     text = raw.decode("utf-8", errors="ignore")
 
