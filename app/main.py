@@ -28,12 +28,12 @@ class ChatRequest(BaseModel):
     question: str = Field(..., min_length=3, description="Student question")
 
 class QuizRequest(BaseModel):
-    course_id: int = Field(..., gt=0)
+    course_id: int = Field(..., gt=0, description="Moodle course ID")
     topic: str = Field(..., min_length=3)
     num_questions: int = Field(default=5, ge=1, le=50)
     content: str = Field(
         ...,
-        min_length=20,
+        min_length=50,
         description="Extracted course content used to generate quiz"
     )
 
@@ -76,7 +76,6 @@ async def chat(req: ChatRequest):
         }
 
     except ValueError as e:
-        # User / data issue
         raise HTTPException(status_code=400, detail=str(e))
 
     except Exception:
@@ -113,10 +112,7 @@ def generate_quiz_api(req: QuizRequest):
         }
 
     except ValueError as e:
-        # Covers:
-        # - Empty content
-        # - Invalid JSON from LLM
-        # - Schema mismatch
+        # AI output / validation / schema errors
         raise HTTPException(
             status_code=422,
             detail=str(e)
