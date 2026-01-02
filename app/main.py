@@ -68,12 +68,20 @@ async def chat(req: ChatRequest):
             "answer": answer
         }
 
-    except Exception as e:
-        # IMPORTANT: fail gracefully (do not crash backend)
-        logging.error(f"[CHAT ERROR] {e}")
+    except ValueError as e:
+        # Known issues (e.g., no content)
         return {
             "status": "error",
-            "message": "Chat service unavailable. Content index mismatch."
+            "message": str(e)
+        }
+    
+    except Exception as e:
+        # Unexpected errors
+        logging.error(f"[CHAT ERROR] {e}")
+        traceback.print_exc()
+        return {
+            "status": "error",
+            "message": "Chat service temporarily unavailable."
         }
 
 # -------------------------------------------------
