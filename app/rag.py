@@ -66,13 +66,15 @@ async def rag_answer(course_id: int, question: str):
     query_emb = embed_text(question)
     print(f"[RAG] Embedding generated (dim={len(query_emb)})")
 
-    # Search
+    # Search using query_points (correct Qdrant API)
     try:
-        results = client.search(
+        results = client.query_points(
             collection_name=collection,
-            query_vector=query_emb,
+            query=query_emb,
             limit=5
         )
+        results = results.points  # Extract points from QueryResponse
+        print(f"[RAG] Found {len(results)} results")
     except Exception as e:
         print(f"[RAG ERROR] Search failed: {e}")
         raise
@@ -137,7 +139,7 @@ async def ingest_file(course_id: int, chapter_id: int, file: UploadFile):
         
         points.append(
             PointStruct(
-                id=f"{chapter_id}_{idx}",
+                id=chapter_id * 10000 + idx,
                 vector=emb,
                 payload={
                     "text": chunk,

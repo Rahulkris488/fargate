@@ -1,6 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import List
 import os
+from dotenv import load_dotenv
+
+# Load .env file
+load_dotenv()
 
 # ===========================
 # ABSTRACT INTERFACE
