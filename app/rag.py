@@ -2,6 +2,7 @@ from fastapi import UploadFile
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from app.qdrant_client import client
 from app.embeddings import embed_text, llm
+import logging
 
 VECTOR_SIZE = 384  # MUST match SentenceTransformer all-MiniLM-L6-v2
 
@@ -17,7 +18,7 @@ def ensure_collection_exists(collection_name: str):
         collections = [c.name for c in client.get_collections().collections]
         
         if collection_name not in collections:
-            print(f"[QDRANT] Creating collection: {collection_name}")
+            logging.info(f"[QDRANT] Creating collection: {collection_name}")
             
             client.create_collection(
                 collection_name=collection_name,
@@ -26,19 +27,29 @@ def ensure_collection_exists(collection_name: str):
                     distance=Distance.COSINE
                 )
             )
-            print(f"[QDRANT] Collection created: {collection_name}")
+            logging.info(f"[QDRANT] ✓ Collection created: {collection_name}")
         else:
-            print(f"[QDRANT] Collection already exists: {collection_name}")
+            logging.info(f"[QDRANT] Collection already exists: {collection_name}")
             
     except Exception as e:
-        print(f"[QDRANT ERROR] Failed to ensure collection: {e}")
+        logging.error(f"[QDRANT ERROR] Failed to ensure collection: {e}")
         raise
 
 # =====================================================
 # CHUNK TEXT
 # =====================================================
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200):
-    """Split text into overlapping chunks"""
+    """
+    Split text into overlapping chunks for better semantic search
+    
+    Args:
+        text: Input text to chunk
+        chunk_size: Size of each chunk in characters
+        overlap: Overlap between consecutive chunks
+    
+    Returns:
+        List of text chunks
+    """
     chunks = []
     start = 0
     text_len = len(text)
@@ -47,7 +58,8 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200):
         end = start + chunk_size
         chunk = text[start:end].strip()
         
-        if chunk and len(chunk) > 50:  # Skip very short chunks
+        # Only keep chunks with meaningful content
+        if chunk and len(chunk) > 50:
             chunks.append(chunk)
         
         start = end - overlap
@@ -58,34 +70,37 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200):
     return chunks
 
 # =====================================================
-# 🆕 NEW: INDEX COURSE CONTENT
+# INDEX COURSE CONTENT
 # =====================================================
 async def index_course_content(course_id: int, course_name: str, documents: list):
     """
-    Index course content from Moodle into Qdrant.
+    Index course content from Moodle into Qdrant vector database.
+    This replaces any existing indexed content for the course.
     
     Args:
         course_id: Moodle course ID
-        course_name: Course name
+        course_name: Course name for metadata
         documents: List of dicts with keys: type, source, content
     
     Returns:
-        dict with success status and stats
+        dict with success status and indexing statistics
     """
-    print(f"\n[INDEX] Starting indexing for course {course_id}")
-    print(f"[INDEX] Course name: {course_name}")
-    print(f"[INDEX] Documents to process: {len(documents)}")
+    logging.info(f"\n{'='*60}")
+    logging.info(f"[INDEX] Starting indexing for course {course_id}")
+    logging.info(f"[INDEX] Course name: {course_name}")
+    logging.info(f"[INDEX] Documents to process: {len(documents)}")
+    logging.info(f"{'='*60}")
     
     collection_name = f"course_{course_id}_chunks"
     
-    # Create or recreate collection (avoids duplicates)
+    # Create or recreate collection (this avoids duplicates)
     try:
-        # Delete if exists
+        # Delete existing collection if it exists
         try:
             client.delete_collection(collection_name)
-            print(f"[INDEX] Deleted old collection: {collection_name}")
+            logging.info(f"[INDEX] ✓ Deleted old collection: {collection_name}")
         except:
-            pass
+            logging.info(f"[INDEX] No existing collection to delete")
         
         # Create fresh collection
         ensure_collection_exists(collection_name)
@@ -96,26 +111,38 @@ async def index_course_content(course_id: int, course_name: str, documents: list
     # Process all documents
     all_points = []
     point_id = 0
+    total_content_length = 0
     
     for doc_idx, doc in enumerate(documents):
         content = doc.get('content', '').strip()
         source = doc.get('source', 'Unknown')
         doc_type = doc.get('type', 'text')
         
+        # Skip empty or very short documents
         if not content or len(content) < 50:
-            print(f"[INDEX] Skipping empty/short document {doc_idx}")
+            logging.warning(
+                f"[INDEX] Skipping document {doc_idx}: "
+                f"too short ({len(content)} chars)"
+            )
             continue
+        
+        total_content_length += len(content)
         
         # Chunk the content
         chunks = chunk_text(content, chunk_size=1000, overlap=200)
-        print(f"[INDEX] Document {doc_idx} ({doc_type}): {len(chunks)} chunks from '{source}'")
+        logging.info(
+            f"[INDEX] Document {doc_idx} ({doc_type}): "
+            f"{len(chunks)} chunks from '{source}' "
+            f"({len(content)} chars)"
+        )
         
+        # Process each chunk
         for chunk_idx, chunk in enumerate(chunks):
             try:
-                # Generate embedding
+                # Generate embedding vector
                 embedding = embed_text(chunk)
                 
-                # Create point
+                # Create point for Qdrant
                 point = PointStruct(
                     id=point_id,
                     vector=embedding,
@@ -134,53 +161,68 @@ async def index_course_content(course_id: int, course_name: str, documents: list
                 point_id += 1
                 
             except Exception as e:
-                print(f"[INDEX ERROR] Failed to process chunk {chunk_idx} of doc {doc_idx}: {e}")
+                logging.error(
+                    f"[INDEX ERROR] Failed to process chunk {chunk_idx} "
+                    f"of document {doc_idx}: {e}"
+                )
                 continue
     
+    # Validate we have content to index
     if not all_points:
-        raise ValueError("No valid content to index")
+        raise ValueError(
+            "No valid content to index. All documents were empty or too short."
+        )
     
-    # Upsert all points
-    print(f"[INDEX] Upserting {len(all_points)} points to {collection_name}")
+    # Store all points in Qdrant
+    logging.info(f"\n[INDEX] Upserting {len(all_points)} points to {collection_name}")
     
     try:
         client.upsert(
             collection_name=collection_name,
             points=all_points
         )
-        print(f"[INDEX] Successfully indexed {len(all_points)} chunks")
+        logging.info(f"[INDEX] ✓ Successfully indexed {len(all_points)} chunks")
         
     except Exception as e:
-        raise ValueError(f"Failed to store vectors: {str(e)}")
+        raise ValueError(f"Failed to store vectors in Qdrant: {str(e)}")
     
-    return {
+    # Return success with statistics
+    result = {
         "success": True,
         "course_id": course_id,
         "course_name": course_name,
         "documents_processed": len(documents),
         "chunks_indexed": len(all_points),
+        "total_content_chars": total_content_length,
         "collection": collection_name
     }
+    
+    logging.info(f"\n{'='*60}")
+    logging.info(f"[INDEX SUCCESS] {result}")
+    logging.info(f"{'='*60}\n")
+    
+    return result
 
 # =====================================================
-# 🆕 NEW: GET COURSE STATUS
+# GET COURSE STATUS
 # =====================================================
 async def get_course_status(course_id: int):
     """
-    Check if a course has been indexed and get stats.
+    Check if a course has been indexed and get statistics.
     
     Args:
         course_id: Moodle course ID
     
     Returns:
-        dict with indexing status and stats
+        dict with indexing status and chunk count
     """
     collection_name = f"course_{course_id}_chunks"
     
     try:
+        # Try to get collection info
         collection_info = client.get_collection(collection_name)
         
-        return {
+        result = {
             "course_id": course_id,
             "indexed": True,
             "chunks": collection_info.points_count,
@@ -188,44 +230,73 @@ async def get_course_status(course_id: int):
             "message": f"Course has {collection_info.points_count} indexed chunks"
         }
         
-    except Exception:
-        return {
+        logging.info(f"[STATUS] Course {course_id}: indexed with {result['chunks']} chunks")
+        return result
+        
+    except Exception as e:
+        # Collection doesn't exist or other error
+        result = {
             "course_id": course_id,
             "indexed": False,
             "chunks": 0,
             "collection": collection_name,
             "message": "Course has not been indexed yet"
         }
+        
+        logging.info(f"[STATUS] Course {course_id}: not indexed")
+        return result
 
 # =====================================================
-# RAG ANSWER - Updated to handle missing collections
+# RAG ANSWER - With Better Error Handling
 # =====================================================
 async def rag_answer(course_id: int, question: str):
-    print("\n[RAG] START")
-    print(f"[RAG] course_id={course_id}")
-    print(f"[RAG] question={question}")
+    """
+    Answer student questions using RAG (Retrieval-Augmented Generation)
+    
+    Args:
+        course_id: Moodle course ID
+        question: Student's question
+    
+    Returns:
+        AI-generated answer based on course materials
+    """
+    logging.info("\n" + "="*60)
+    logging.info(f"[RAG] Starting RAG query")
+    logging.info(f"[RAG] Course ID: {course_id}")
+    logging.info(f"[RAG] Question: {question}")
+    logging.info("="*60)
 
     collection = f"course_{course_id}_chunks"
     
     # Check if collection exists and has content
     try:
         collection_info = client.get_collection(collection)
+        
         if collection_info.points_count == 0:
+            logging.warning(f"[RAG] Collection {collection} exists but is empty")
             return (
                 "⚠️ This course content has not been indexed yet. "
                 "Please contact your administrator to enable AI support for this course."
             )
-    except Exception:
+        
+        logging.info(f"[RAG] Collection has {collection_info.points_count} chunks")
+        
+    except Exception as e:
+        logging.warning(f"[RAG] Collection {collection} does not exist: {e}")
         return (
             "⚠️ This course content has not been indexed yet. "
             "Please contact your administrator to enable AI support for this course."
         )
 
-    # Generate embedding
-    query_emb = embed_text(question)
-    print(f"[RAG] Embedding generated (dim={len(query_emb)})")
+    # Generate embedding for the question
+    try:
+        query_emb = embed_text(question)
+        logging.info(f"[RAG] ✓ Embedding generated (dimension={len(query_emb)})")
+    except Exception as e:
+        logging.error(f"[RAG ERROR] Failed to generate embedding: {e}")
+        raise
 
-    # Search using query_points
+    # Search for relevant chunks in Qdrant
     try:
         results = client.query_points(
             collection_name=collection,
@@ -233,23 +304,38 @@ async def rag_answer(course_id: int, question: str):
             limit=5
         )
         results = results.points
-        print(f"[RAG] Found {len(results)} results")
+        logging.info(f"[RAG] ✓ Found {len(results)} relevant chunks")
+        
+        # Log relevance scores
+        for idx, hit in enumerate(results):
+            logging.info(
+                f"[RAG]   Result {idx+1}: score={hit.score:.4f}, "
+                f"source={hit.payload.get('source', 'Unknown')}"
+            )
+            
     except Exception as e:
-        print(f"[RAG ERROR] Search failed: {e}")
+        logging.error(f"[RAG ERROR] Qdrant search failed: {e}")
         raise
 
+    # Handle case where no relevant content was found
     if not results:
-        return "I couldn't find relevant information in the course materials to answer your question. Could you rephrase or ask something else?"
+        logging.warning("[RAG] No relevant content found for question")
+        return (
+            "I couldn't find relevant information in the course materials "
+            "to answer your question. Could you rephrase or ask something else?"
+        )
 
-    # Build context
-    context = "\n\n---\n\n".join(
-        f"Source: {hit.payload.get('source', 'Unknown')}\n{hit.payload.get('text', '')}" 
-        for hit in results
-    )
+    # Build context from search results
+    context_parts = []
+    for hit in results:
+        source = hit.payload.get('source', 'Unknown')
+        text = hit.payload.get('text', '')
+        context_parts.append(f"Source: {source}\n{text}")
+    
+    context = "\n\n---\n\n".join(context_parts)
+    logging.info(f"[RAG] Context assembled: {len(context)} characters")
 
-    print(f"[RAG] Context size = {len(context)} chars")
-
-    # Generate answer
+    # Generate answer using LLM
     prompt = f"""You are an AI tutor for a Moodle course. Answer the student's question using ONLY the course materials provided below.
 
 COURSE MATERIALS:
@@ -266,25 +352,51 @@ INSTRUCTIONS:
 
 ANSWER:"""
 
-    answer = llm(prompt)
-    print("[RAG] LLM response generated")
-    return answer
+    try:
+        answer = llm(prompt)
+        logging.info(f"[RAG] ✓ LLM response generated ({len(answer)} chars)")
+        logging.info("="*60 + "\n")
+        return answer
+        
+    except Exception as e:
+        logging.error(f"[RAG ERROR] LLM generation failed: {e}")
+        raise
 
 # =====================================================
-# ✅ UNCHANGED: INGEST FILE
+# INGEST FILE (Legacy endpoint)
 # =====================================================
 async def ingest_file(course_id: int, chapter_id: int, file: UploadFile):
-    print("\n[INGEST] START")
-    print(f"[INGEST] course_id={course_id}, chapter_id={chapter_id}, file={file.filename}")
+    """
+    Ingest a single file into the vector database (legacy endpoint).
+    This adds to existing course content without replacing it.
+    
+    Args:
+        course_id: Moodle course ID
+        chapter_id: Chapter/section ID
+        file: Uploaded file
+    
+    Returns:
+        dict with number of chunks processed
+    """
+    logging.info("\n" + "="*60)
+    logging.info(f"[INGEST] Starting file ingestion")
+    logging.info(f"[INGEST] Course ID: {course_id}")
+    logging.info(f"[INGEST] Chapter ID: {chapter_id}")
+    logging.info(f"[INGEST] File: {file.filename}")
+    logging.info("="*60)
 
     collection = f"course_{course_id}_chunks"
 
-    # Ensure collection exists
+    # Ensure collection exists (won't recreate if exists)
     ensure_collection_exists(collection)
 
-    # Read file
-    raw = await file.read()
-    text = raw.decode("utf-8", errors="ignore")
+    # Read file content
+    try:
+        raw = await file.read()
+        text = raw.decode("utf-8", errors="ignore")
+        logging.info(f"[INGEST] File read: {len(text)} characters")
+    except Exception as e:
+        raise ValueError(f"Failed to read file: {str(e)}")
 
     # Split into chunks
     chunks = chunk_text(text, chunk_size=1000, overlap=200)
@@ -292,33 +404,47 @@ async def ingest_file(course_id: int, chapter_id: int, file: UploadFile):
     if not chunks:
         raise ValueError("No valid text chunks found in file")
 
-    print(f"[INGEST] Processing {len(chunks)} chunks")
+    logging.info(f"[INGEST] Processing {len(chunks)} chunks")
 
-    # Create points
+    # Create points for Qdrant
     points = []
     for idx, chunk in enumerate(chunks):
-        emb = embed_text(chunk)
-        
-        points.append(
-            PointStruct(
+        try:
+            emb = embed_text(chunk)
+            
+            # Use chapter_id in point ID to avoid conflicts
+            point = PointStruct(
                 id=chapter_id * 10000 + idx,
                 vector=emb,
                 payload={
                     "text": chunk,
                     "course_id": course_id,
                     "chapter_id": chapter_id,
-                    "source": file.filename
+                    "source": file.filename,
+                    "type": "file_upload"
                 }
             )
-        )
+            points.append(point)
+            
+        except Exception as e:
+            logging.error(f"[INGEST ERROR] Failed to process chunk {idx}: {e}")
+            continue
 
-    # Upsert to Qdrant
-    print(f"[INGEST] Upserting {len(points)} points to collection {collection}")
+    if not points:
+        raise ValueError("Failed to process any chunks from file")
+
+    # Store in Qdrant
+    logging.info(f"[INGEST] Upserting {len(points)} points to {collection}")
     
-    client.upsert(
-        collection_name=collection,
-        points=points
-    )
+    try:
+        client.upsert(
+            collection_name=collection,
+            points=points
+        )
+        logging.info(f"[INGEST] ✓ Successfully stored {len(points)} chunks")
+        
+    except Exception as e:
+        raise ValueError(f"Failed to store in Qdrant: {str(e)}")
 
-    print(f"[INGEST] Successfully stored {len(points)} chunks")
+    logging.info("="*60 + "\n")
     return {"chunks": len(points)}
