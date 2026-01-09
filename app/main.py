@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel, Field
 from app.quiz import generate_quiz
-from app.rag import rag_answer, ingest_file
+from app.rag import rag_answer, ingest_file, index_course_content, get_course_status
 import traceback
 import logging
 
@@ -10,8 +10,8 @@ import logging
 # -------------------------------------------------
 app = FastAPI(
     title="Moodle AI Backend",
-    version="1.0.0",
-    description="Enterprise AI backend for Moodle plugins (Quiz + Chat)"
+    version="1.0.1",
+    description="Enterprise AI backend for Moodle plugins (Quiz + Chat + Indexing)"
 )
 
 logging.basicConfig(
@@ -23,10 +23,14 @@ logging.basicConfig(
 # MODELS
 # -------------------------------------------------
 
+# 🆕 UPDATED: Added course_name and user_id for chat
 class ChatRequest(BaseModel):
     course_id: int = Field(..., gt=0, description="Moodle course ID")
+    course_name: str = Field(..., description="Course name")
+    user_id: int = Field(..., gt=0, description="User ID")
     question: str = Field(..., min_length=3, description="Student question")
 
+# ✅ UNCHANGED: Quiz request model
 class QuizRequest(BaseModel):
     course_id: int = Field(..., gt=0)
     topic: str = Field(..., min_length=3)
@@ -37,6 +41,12 @@ class QuizRequest(BaseModel):
         description="Extracted course content"
     )
 
+# 🆕 NEW: Model for indexing course content
+class IndexRequest(BaseModel):
+    course_id: int = Field(..., gt=0, description="Course ID")
+    course_name: str = Field(..., description="Course name")
+    documents: list = Field(..., description="List of documents to index")
+
 # -------------------------------------------------
 # ROOT / HEALTH
 # -------------------------------------------------
@@ -44,9 +54,15 @@ class QuizRequest(BaseModel):
 @app.get("/")
 def root():
     return {
-        "service": "Moodle AI Backend",
-        "status": "running",
-        "version": "1.0.0"
+        "message": "Moodle AI Backend is running",
+        "version": "1.0.1",
+        "endpoints": {
+            "chat": "POST /chat",
+            "index": "POST /index",
+            "course_status": "GET /course/{id}/status",
+            "quiz": "POST /generate-quiz",
+            "ingest": "POST /ingest"
+        }
     }
 
 @app.get("/health")
@@ -54,38 +70,75 @@ def health():
     return {"status": "ok"}
 
 # -------------------------------------------------
-# CHAT (RAG)
+# CHAT (RAG) - Updated
 # -------------------------------------------------
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
     try:
-        logging.info(f"[CHAT] course_id={req.course_id}")
+        logging.info(f"[CHAT] course_id={req.course_id}, user_id={req.user_id}")
         answer = await rag_answer(req.course_id, req.question)
 
         return {
-            "status": "success",
             "answer": answer
         }
 
     except ValueError as e:
-        # Known issues (e.g., no content)
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        logging.error(f"[CHAT ERROR] ValueError: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     
     except Exception as e:
-        # Unexpected errors
         logging.error(f"[CHAT ERROR] {e}")
         traceback.print_exc()
-        return {
-            "status": "error",
-            "message": "Chat service temporarily unavailable."
-        }
+        raise HTTPException(status_code=500, detail="Chat service temporarily unavailable")
 
 # -------------------------------------------------
-# QUIZ GENERATION
+# 🆕 NEW: INDEX COURSE CONTENT
+# -------------------------------------------------
+
+@app.post("/index")
+async def index_course(req: IndexRequest):
+    try:
+        logging.info(
+            f"[INDEX] course_id={req.course_id}, "
+            f"documents={len(req.documents)}"
+        )
+        
+        result = await index_course_content(
+            course_id=req.course_id,
+            course_name=req.course_name,
+            documents=req.documents
+        )
+        
+        return result
+        
+    except ValueError as e:
+        logging.error(f"[INDEX ERROR] ValueError: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    except Exception as e:
+        logging.error(f"[INDEX ERROR] {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Indexing failed")
+
+# -------------------------------------------------
+# 🆕 NEW: GET COURSE STATUS
+# -------------------------------------------------
+
+@app.get("/course/{course_id}/status")
+async def course_status(course_id: int):
+    try:
+        logging.info(f"[STATUS] course_id={course_id}")
+        result = await get_course_status(course_id)
+        return result
+        
+    except Exception as e:
+        logging.error(f"[STATUS ERROR] {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Status check failed")
+
+# -------------------------------------------------
+# ✅ UNCHANGED: QUIZ GENERATION
 # -------------------------------------------------
 
 @app.post("/generate-quiz")
@@ -121,7 +174,7 @@ def generate_quiz_api(req: QuizRequest):
         )
 
 # -------------------------------------------------
-# INGEST (RAG)
+# ✅ UNCHANGED: INGEST (RAG)
 # -------------------------------------------------
 
 @app.post("/ingest")
