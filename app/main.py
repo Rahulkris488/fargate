@@ -444,3 +444,12 @@ async def ingest(
             status_code=500,
             detail=f"Ingestion failed: {str(e)}"
         )
+@app.get("/__debug/routes")
+def debug_routes():
+    return [
+        {
+            "path": route.path,
+            "methods": list(route.methods)
+        }
+        for route in app.routes
+    ]
