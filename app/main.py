@@ -12,13 +12,13 @@ import logging
 app = FastAPI(
     title="Moodle AI Backend",
     version="1.1.0-phase1",
-    description="Enterprise AI backend for Moodle plugins (Quiz + Chat + Indexing) - Phase 1: Basic Connectivity"
+    description="Enterprise AI backend for Moodle - Phase 1: Basic Connectivity"
 )
 
-# CORS middleware for Moodle frontend
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your Moodle domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -43,11 +43,7 @@ class QuizRequest(BaseModel):
     course_id: int = Field(..., gt=0)
     topic: str = Field(..., min_length=3)
     num_questions: int = Field(default=5, ge=1, le=50)
-    content: str = Field(
-        ...,
-        min_length=20,
-        description="Extracted course content"
-    )
+    content: str = Field(..., min_length=20, description="Extracted course content")
 
 class IndexRequest(BaseModel):
     course_id: int = Field(..., gt=0, description="Course ID")
