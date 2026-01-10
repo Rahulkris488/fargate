@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from app.quiz import generate_quiz
 from app.rag import rag_answer, ingest_file, index_course_content, get_course_status
+from app.embeddings import llm
 import traceback
 import logging
 
@@ -11,8 +12,8 @@ import logging
 # -------------------------------------------------
 app = FastAPI(
     title="Moodle AI Backend",
-    version="1.1.0-phase1",
-    description="Enterprise AI backend for Moodle - Phase 1: Basic Connectivity"
+    version="2.0.0-phase2",
+    description="Enterprise AI backend for Moodle - Phase 2: Real AI Chat with GROQ"
 )
 
 # CORS middleware
@@ -58,22 +59,22 @@ class IndexRequest(BaseModel):
 def root():
     return {
         "message": "Moodle AI Backend is running",
-        "version": "1.1.0-phase1",
+        "version": "2.0.0-phase2",
         "status": "healthy",
-        "phase": "1 - Basic Connectivity Testing",
-        "mode": "development",
+        "phase": "2 - Real AI Chat with GROQ",
+        "mode": "production",
         "endpoints": {
-            "chat_test": "POST /chat/test (Phase 1 - Static responses for testing)",
-            "chat": "POST /chat (Phase 2+ - AI with RAG)",
+            "chat": "POST /chat (Phase 2 - Real AI responses)",
+            "chat_test": "POST /chat/test (Phase 1 - Static responses - DEPRECATED)",
             "index": "POST /index",
             "course_status": "GET /course/{id}/status",
             "quiz": "POST /generate-quiz",
             "ingest": "POST /ingest"
         },
         "phase_info": {
-            "current": "Phase 1 - Basic Connectivity",
-            "status": "Testing static responses",
-            "next": "Phase 2 - Direct AI Chat with GROQ"
+            "current": "Phase 2 - Real AI Chat",
+            "status": "GROQ AI active - General knowledge Q&A",
+            "next": "Phase 3 - Course Content RAG"
         }
     }
 
@@ -81,183 +82,130 @@ def root():
 def health():
     return {
         "status": "ok", 
-        "version": "1.1.0-phase1",
-        "phase": 1
+        "version": "2.0.0-phase2",
+        "phase": 2
     }
 
 # -------------------------------------------------
-# 🆕 PHASE 1: CHAT TEST (Static Responses)
-# -------------------------------------------------
-
-@app.post("/chat/test")
-async def chat_test(req: ChatRequest):
-    """
-    Phase 1: Simple test endpoint with static responses
-    No AI, no RAG - just connectivity testing
-    """
-    try:
-        question = req.question.lower().strip()
-        
-        logging.info(
-            f"[CHAT TEST] course_id={req.course_id}, "
-            f"user_id={req.user_id}, "
-            f"course='{req.course_name}', "
-            f"question='{question}'"
-        )
-        
-        # Pattern matching for static responses
-        if any(greeting in question for greeting in ['hi', 'hello', 'hey', 'greetings', 'good morning', 'good afternoon']):
-            answer = f"""👋 **Hello there!**
-
-I'm your AI Tutor for **{req.course_name}**. 
-
-I'm here to help you learn and understand the course materials better!
-
-Try asking me:
-- "help" - to see what I can do
-- "what can you do?" - to learn about my features"""
-
-        elif 'help' in question or 'what can you do' in question or 'capabilities' in question:
-            answer = """🎓 **I'm Your AI Learning Assistant!**
-
-Here's what I can help you with:
-
-📚 **Course Questions**
-   Ask me anything about your course materials and I'll provide detailed explanations.
-
-💡 **Concept Explanations**
-   Need help understanding a topic? I'll break it down for you.
-
-🎯 **Study Guidance**
-   Get study tips, exam preparation help, and learning strategies.
-
-❓ **Quick Answers**
-   Fast, accurate answers to your questions anytime.
-
----
-
-**Example questions to try:**
-- "What is this course about?"
-- "Explain [topic] to me"
-- "Help me understand [concept]"
-- "What should I study for the exam?"
-
-**Current Status:** 🚧 Phase 1 Testing Mode
-I'm currently in development mode with basic responses. Soon I'll have full AI capabilities!"""
-
-        elif 'thank' in question or 'thanks' in question:
-            answer = """You're very welcome! 😊
-
-I'm always here to help you learn. Feel free to ask me anything about your course materials!
-
-Happy studying! 📚"""
-
-        elif 'bye' in question or 'goodbye' in question or 'see you' in question:
-            answer = """Goodbye! 👋
-
-Come back anytime you need help with your studies. I'm always here to assist you!
-
-Good luck with your learning! 🌟"""
-
-        elif 'who are you' in question or 'what are you' in question:
-            answer = f"""🤖 **I'm Your AI Tutor!**
-
-I'm an artificial intelligence assistant designed specifically to help students like you succeed in **{req.course_name}**.
-
-**My Purpose:**
-- Answer your questions about course content
-- Explain difficult concepts in simple terms
-- Provide study guidance and learning support
-- Be available 24/7 whenever you need help
-
-**Current Development Phase:** Phase 1 - Basic Testing
-I'm being carefully developed to ensure I provide accurate, helpful responses based on your actual course materials."""
-
-        elif 'test' in question or 'testing' in question:
-            answer = """✅ **Connection Test Successful!**
-
-Everything is working correctly:
-- ✅ Moodle → Backend connection: **Active**
-- ✅ Authentication: **Verified**
-- ✅ Course context: **{course_name}**
-- ✅ User ID: **{user_id}**
-- ✅ Response system: **Operational**
-
-**Phase 1 Status:** All systems nominal!
-
-Try asking me a real question or say "help" to see what I can do!""".format(
-                course_name=req.course_name,
-                user_id=req.user_id
-            )
-
-        elif len(question) < 3:
-            answer = """I received a very short message. 
-
-Could you please ask me a complete question? For example:
-- "Help" - to see what I can do
-- "What is this course about?"
-- "Explain [topic] to me"
-
-I'm here to help! 😊"""
-
-        else:
-            # Default response for unrecognized questions
-            answer = f"""I received your question: **"{req.question}"**
-
-🚧 **Phase 1 Development Mode Active**
-
-I'm currently in testing mode and can only respond to basic greetings and commands. 
-
-**What works right now:**
-- Say **"hi"** or **"hello"** - Get a greeting
-- Say **"help"** - See my capabilities  
-- Say **"test"** - Check connection status
-- Say **"thank you"** - Get a friendly response
-
-**Coming in Phase 2:**
-✅ Full AI-powered responses using GROQ
-✅ Answer any question you have
-✅ Intelligent, context-aware assistance
-
-**Coming in Phase 3+:**
-✅ Search through your actual course materials
-✅ Provide answers based on course content
-✅ Citation of sources from your materials
-
-For now, try one of the commands above to test the connection! 🚀"""
-
-        logging.info(f"[CHAT TEST] Response generated, length={len(answer)}")
-        
-        return {
-            "success": True,
-            "answer": answer,
-            "mode": "test",
-            "phase": 1,
-            "course_id": req.course_id,
-            "course_name": req.course_name
-        }
-        
-    except Exception as e:
-        logging.error(f"[CHAT TEST ERROR] {e}")
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500, 
-            detail="Chat test service error"
-        )
-
-# -------------------------------------------------
-# CHAT (RAG) - Phase 2+
+# 🆕 PHASE 2: REAL AI CHAT (GROQ)
 # -------------------------------------------------
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
     """
-    Handle student questions using RAG (Retrieval-Augmented Generation)
-    Phase 2+: Full AI with course content search
+    Phase 2: Real AI chat using GROQ
+    Answers any question using AI - no course materials yet
+    Phase 3 will add RAG with course content
+    """
+    try:
+        question = req.question.strip()
+        
+        logging.info(
+            f"[CHAT AI] course_id={req.course_id}, "
+            f"user_id={req.user_id}, "
+            f"course='{req.course_name}', "
+            f"question='{question[:100]}...'"
+        )
+        
+        # Build AI prompt with context
+        prompt = f"""You are an AI tutor helping a student in the course: "{req.course_name}".
+
+The student asks: {question}
+
+Provide a helpful, clear, and educational response. Be conversational and student-friendly.
+
+Guidelines:
+- Give accurate, helpful information
+- Use simple language appropriate for students
+- If it's a greeting, respond warmly and mention you're ready to help
+- If asked what you can do, explain you can help with course questions, concepts, and learning
+- Keep responses focused and concise (2-4 paragraphs unless more detail is needed)
+- If you don't know something, be honest about it
+
+Response:"""
+
+        # Get AI response from GROQ
+        try:
+            answer = llm(prompt)
+            logging.info(f"[CHAT AI] ✓ Response generated ({len(answer)} chars)")
+        except Exception as e:
+            logging.error(f"[CHAT AI ERROR] GROQ failed: {e}")
+            # Fallback error message
+            return {
+                "success": False,
+                "error": "AI service temporarily unavailable. Please try again in a moment."
+            }
+        
+        return {
+            "success": True,
+            "answer": answer,
+            "mode": "ai",
+            "phase": 2,
+            "course_id": req.course_id,
+            "course_name": req.course_name,
+            "model": "groq-llama-3.1-8b"
+        }
+        
+    except Exception as e:
+        logging.error(f"[CHAT AI ERROR] {e}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500, 
+            detail="Chat service error"
+        )
+
+# -------------------------------------------------
+# PHASE 1: CHAT TEST (Static - DEPRECATED but kept for compatibility)
+# -------------------------------------------------
+
+@app.post("/chat/test")
+async def chat_test(req: ChatRequest):
+    """
+    Phase 1: Static test responses (DEPRECATED)
+    Kept for backward compatibility only
+    Use /chat endpoint for real AI
+    """
+    try:
+        question = req.question.lower().strip()
+        
+        logging.info(
+            f"[CHAT TEST - DEPRECATED] Using old endpoint, "
+            f"question='{question}'"
+        )
+        
+        # Simple responses
+        if any(g in question for g in ['hi', 'hello', 'hey']):
+            answer = f"👋 Hello! I'm your AI Tutor for **{req.course_name}**. Ask me anything!"
+        elif 'help' in question:
+            answer = "I can help with course questions, explanations, and learning. Just ask!"
+        else:
+            answer = f"⚠️ You're using the deprecated test endpoint. Please use the main /chat endpoint for real AI responses."
+
+        return {
+            "success": True,
+            "answer": answer,
+            "mode": "test-deprecated",
+            "phase": 1,
+            "warning": "This endpoint is deprecated. Use /chat for real AI responses."
+        }
+        
+    except Exception as e:
+        logging.error(f"[CHAT TEST ERROR] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# -------------------------------------------------
+# CHAT RAG - Phase 3+ (Course content search)
+# -------------------------------------------------
+
+@app.post("/chat/rag")
+async def chat_rag(req: ChatRequest):
+    """
+    Phase 3+: RAG chat with course content
+    Searches course materials and provides context-aware answers
     """
     try:
         logging.info(
-            f"[CHAT] course_id={req.course_id}, "
+            f"[CHAT RAG] course_id={req.course_id}, "
             f"user_id={req.user_id}, "
             f"question_len={len(req.question)}"
         )
@@ -268,19 +216,19 @@ async def chat(req: ChatRequest):
             "success": True,
             "answer": answer,
             "mode": "rag",
-            "phase": 2
+            "phase": 3
         }
 
     except ValueError as e:
-        logging.error(f"[CHAT ERROR] ValueError: {e}")
+        logging.error(f"[CHAT RAG ERROR] ValueError: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     
     except Exception as e:
-        logging.error(f"[CHAT ERROR] {e}")
+        logging.error(f"[CHAT RAG ERROR] {e}")
         traceback.print_exc()
         raise HTTPException(
             status_code=500, 
-            detail="Chat service temporarily unavailable"
+            detail="RAG service temporarily unavailable"
         )
 
 # -------------------------------------------------
@@ -299,7 +247,6 @@ async def index_course(req: IndexRequest):
             f"documents={len(req.documents)}"
         )
         
-        # Validate documents
         if not req.documents or len(req.documents) == 0:
             raise ValueError("No documents provided to index")
         
@@ -405,7 +352,7 @@ def generate_quiz_api(req: QuizRequest):
         )
 
 # -------------------------------------------------
-# INGEST FILE (Legacy RAG endpoint)
+# INGEST FILE
 # -------------------------------------------------
 
 @app.post("/ingest")
@@ -415,7 +362,7 @@ async def ingest(
     file: UploadFile = File(...)
 ):
     """
-    Ingest a single file into the vector database (legacy endpoint)
+    Ingest a single file into the vector database
     """
     try:
         logging.info(
@@ -444,12 +391,18 @@ async def ingest(
             status_code=500,
             detail=f"Ingestion failed: {str(e)}"
         )
+
+# -------------------------------------------------
+# DEBUG ROUTES
+# -------------------------------------------------
+
 @app.get("/__debug/routes")
 def debug_routes():
+    """List all registered routes (for debugging)"""
     return [
         {
             "path": route.path,
-            "methods": list(route.methods)
+            "methods": list(route.methods) if hasattr(route, 'methods') else []
         }
         for route in app.routes
     ]
