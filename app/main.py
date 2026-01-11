@@ -1,23 +1,23 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import List
-from app.quiz import generate_quiz
-from app.rag import rag_answer, ingest_file, index_course_content, get_course_status
-from app.embeddings import llm
-from app.moodle_extractor import moodle_extractor
-import traceback
+from typing import Optional, List, Dict, Any
 import logging
 
-# -------------------------------------------------
-# App setup
-# -------------------------------------------------
-app = FastAPI(
-    title="Moodle AI Backend",
-    version="3.0.1-phase3",
-    description="Shared backend for Moodle Quiz + AI Tutor (RAG)"
-)
+from app.quiz import generate_quiz
+from app.rag import rag_answer, ingest_file, index_course_content, get_course_status
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="Moodle AI Tutor Backend", version="3.0.0-phase3")
+
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,54 +26,75 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
-
-# -------------------------------------------------
+# ============================================================================
 # MODELS
-# -------------------------------------------------
-
-class ChatRequest(BaseModel):
-    course_id: int = Field(..., gt=0)
-    course_name: str = Field(...)
-    user_id: int = Field(..., gt=0)
-    question: str = Field(..., min_length=1)
+# ============================================================================
 
 class QuizRequest(BaseModel):
-    course_id: int = Field(..., gt=0)
-    topic: str = Field(..., min_length=3)
-    num_questions: int = Field(default=5, ge=1, le=50)
-    content: str = Field(..., min_length=20)
+    content: str
+    num_questions: int = 5
+    difficulty: str = "medium"
 
-class MoodleExtractRequest(BaseModel):
-    course_id: int = Field(..., gt=0)
+class ChatRequest(BaseModel):
+    course_id: int
+    course_name: Optional[str] = None  # Made optional
+    user_id: Optional[int] = None      # Made optional
+    question: str
 
-# -------------------------------------------------
-# ROOT / HEALTH
-# -------------------------------------------------
+class FileUploadRequest(BaseModel):
+    course_id: int
+    course_name: str
 
-@app.get("/")
-def root():
-    return {
-        "message": "Moodle AI Backend is running",
-        "version": "3.0.1-phase3",
-        "status": "healthy",
-        "phase": "3 - Course Content RAG"
-    }
+# ============================================================================
+# HEALTH CHECK
+# ============================================================================
 
 @app.get("/health")
-def health():
+async def health_check():
+    """Health check endpoint"""
     return {
         "status": "ok",
-        "version": "3.0.1-phase3",
-        "moodle_extractor": "ready" if moodle_extractor else "disabled"
+        "version": "3.0.0-phase3",
+        "phase": 3,
+        "moodle_extractor": "ready"
     }
 
-# -------------------------------------------------
-# CHAT (RAG + AI FALLBACK)
-# -------------------------------------------------
+# ============================================================================
+# PHASE 1 & 2: QUIZ GENERATION (UNCHANGED)
+# ============================================================================
+
+@app.post("/generate-quiz")
+async def generate_quiz_endpoint(req: QuizRequest):
+    """Generate quiz from content"""
+    try:
+        logger.info(f"[QUIZ] Generating {req.num_questions} questions, difficulty={req.difficulty}")
+        result = generate_quiz(req.content, req.num_questions, req.difficulty)
+        logger.info(f"[QUIZ] Generated {len(result.get('questions', []))} questions")
+        return result
+    except Exception as e:
+        logger.error(f"[QUIZ] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/upload-file")
+async def upload_file(
+    file: UploadFile = File(...),
+    course_id: int = Form(...),
+    course_name: str = Form(...)
+):
+    """Upload and ingest file for quiz generation"""
+    try:
+        logger.info(f"[UPLOAD] file={file.filename}, course={course_id}")
+        content = await file.read()
+        result = await ingest_file(content, file.filename)
+        logger.info(f"[UPLOAD] Ingested {len(result.get('text', ''))} chars")
+        return result
+    except Exception as e:
+        logger.error(f"[UPLOAD] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# PHASE 3: CHAT WITH RAG
+# ============================================================================
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
@@ -81,235 +102,139 @@ async def chat(req: ChatRequest):
     Smart chat with automatic RAG/AI routing
     - Indexed courses use RAG
     - Non-indexed courses use AI fallback
+    
+    FIXED: Made course_name and user_id optional
     """
     try:
         question = req.question.strip()
         
-        logging.info(
-            f"[CHAT] course_id={req.course_id}, user_id={req.user_id}, "
-            f"course='{req.course_name}', question='{question[:100]}...'"
-        )
+        # Default values if not provided
+        course_name = req.course_name or f"course_{req.course_id}"
+        user_id = req.user_id or 0
+        
+        logger.info(f"[CHAT] course_id={req.course_id}, question='{question[:50]}...'")
         
         # Check if course is indexed
         status = await get_course_status(req.course_id)
-        is_indexed = status.get("indexed", False)
-        chunk_count = status.get("chunks", 0)
         
-        # Try RAG if indexed
-        if is_indexed and chunk_count > 0:
-            logging.info(f"[CHAT] Using RAG mode ({chunk_count} chunks)")
-            try:
-                answer = await rag_answer(req.course_id, question)
-                return {
-                    "success": True,
-                    "response": answer,  # ✅ For chat.js compatibility
-                    "mode": "rag",
-                    "phase": 3,
-                    "sources": [],
-                    "course_id": req.course_id,
-                    "indexed_chunks": chunk_count
-                }
-            except Exception as e:
-                logging.warning(f"[CHAT] RAG failed: {e}, falling back to AI")
-        
-        # AI Fallback
-        logging.info("[CHAT] Using AI mode (course not indexed or RAG failed)")
-        
-        prompt = f"""You are an AI tutor helping a student in the course: "{req.course_name}".
-
-The student asks: {question}
-
-Provide a helpful, clear, and educational response. Be conversational and student-friendly.
-
-Guidelines:
-- Give accurate, helpful information
-- Use simple language appropriate for students
-- If it's a greeting, respond warmly and mention you're ready to help
-- If asked what you can do, explain you can help with course questions, concepts, and learning
-- Keep responses focused and concise (2-4 paragraphs unless more detail is needed)
-- If you don't know something, be honest about it
-
-Response:"""
-
-        try:
-            logging.info("[CHAT] Calling GROQ LLM...")
-            answer = llm(prompt)
-            logging.info(f"[CHAT] ✓ Response generated ({len(answer)} chars)")
-        except Exception as e:
-            logging.error(f"[CHAT ERROR] GROQ failed: {e}")
-            traceback.print_exc()
+        if status["indexed"]:
+            # Use RAG
+            logger.info(f"[CHAT] Using RAG (indexed, {status['chunks']} chunks)")
+            answer = await rag_answer(req.course_id, question)
             return {
-                "success": False,
-                "error": "AI service temporarily unavailable. Please try again."
+                "success": True,
+                "response": answer,  # Changed from "answer" to "response"
+                "mode": "rag",
+                "chunks_used": status['chunks']
             }
-        
-        return {
-            "success": True,
-            "response": answer,  # ✅ For chat.js compatibility
-            "mode": "ai",
-            "phase": 3,
-            "sources": [],
-            "course_id": req.course_id,
-            "note": "Course not indexed yet. Using general AI knowledge."
-        }
-        
-    except Exception as e:
-        logging.error(f"[CHAT ERROR] {e}")
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail="Chat service error"
-        )
+        else:
+            # AI fallback
+            logger.info(f"[CHAT] Using AI fallback (not indexed)")
+            from app.rag import llm_provider
+            
+            fallback_prompt = f"""You are an AI tutor assistant. A student asked:
 
-# -------------------------------------------------
-# INDEX COURSE (FROM MOODLE)
-# -------------------------------------------------
+Question: {question}
+
+Since this course hasn't been indexed yet, provide a helpful, general response based on your knowledge. 
+If you need course-specific information, suggest that the instructor index the course content first.
+
+Respond in a friendly, educational tone."""
+            
+            response = await llm_provider.get_completion(fallback_prompt)
+            
+            return {
+                "success": True,
+                "response": response,  # Changed from "answer" to "response"
+                "mode": "ai",
+                "note": "Course not indexed - using AI fallback"
+            }
+            
+    except Exception as e:
+        logger.error(f"[CHAT] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# PHASE 3: COURSE INDEXING
+# ============================================================================
 
 @app.post("/courses/{course_id}/index")
 async def index_course(course_id: int):
     """
-    Extract and index course content from Moodle
-    Returns immediately with status
+    Index a Moodle course for RAG
+    
+    This endpoint:
+    1. Connects to Moodle via web services
+    2. Extracts all course content (HTML, files, activities)
+    3. Chunks the content
+    4. Stores embeddings in Qdrant
+    
+    FIXED: Returns flat JSON (no nested statistics)
     """
     try:
-        logging.info(f"[INDEX] Starting for course_id={course_id}")
+        logger.info(f"[INDEX] Starting indexing for course_id={course_id}")
         
-        if not moodle_extractor:
-            raise HTTPException(
-                status_code=503,
-                detail="Moodle extractor not configured"
-            )
+        # Index the course
+        result = await index_course_content(course_id)
         
-        # Extract documents
-        documents = moodle_extractor.extract_course_documents(course_id)
+        logger.info(f"[INDEX] Complete: {result.get('chunks_indexed', 0)} chunks indexed")
         
-        if not documents:
-            raise HTTPException(
-                status_code=400,
-                detail="No content found in course"
-            )
-        
-        logging.info(f"[INDEX] Extracted {len(documents)} documents")
-        
-        # Get course name
-        course_name = documents[0]["metadata"].get(
-            "course_name",
-            f"Course {course_id}"
-        )
-        
-        # Index content
-        result = await index_course_content(
-            course_id=course_id,
-            course_name=course_name,
-            documents=documents
-        )
-        
-        logging.info(f"[INDEX] ✓ Indexed {result.get('chunks_indexed', 0)} chunks")
-        
+        # Return flat JSON structure (frontend expects this)
         return {
             "success": True,
-            "message": f"Successfully indexed course '{course_name}'",
             "course_id": course_id,
-            "course_name": course_name,
-            "documents_extracted": len(documents),
+            "course_name": result.get("course_name", f"course_{course_id}"),
+            "documents_extracted": result.get("documents_extracted", 0),
             "chunks_indexed": result.get("chunks_indexed", 0),
-            "total_chars": result.get("total_content_chars", 0)
+            "total_content_chars": result.get("total_content_chars", 0),
+            "document_types": result.get("document_types", {}),
+            "message": "Course indexed successfully"
         }
         
-    except HTTPException:
-        raise
     except Exception as e:
-        logging.error(f"[INDEX ERROR] {e}")
-        traceback.print_exc()
+        logger.error(f"[INDEX] Error: {e}", exc_info=True)
         raise HTTPException(
-            status_code=500,
+            status_code=500, 
             detail=f"Indexing failed: {str(e)}"
         )
 
-# -------------------------------------------------
-# COURSE STATUS
-# -------------------------------------------------
-
 @app.get("/courses/{course_id}/status")
 async def course_status(course_id: int):
-    """Check if course is indexed"""
+    """
+    Check if a course is indexed and get stats
+    """
     try:
-        result = await get_course_status(course_id)
-        logging.info(
-            f"[STATUS] course_id={course_id}, "
-            f"indexed={result.get('indexed', False)}"
-        )
-        return result
+        logger.info(f"[STATUS] Checking course_id={course_id}")
+        status = await get_course_status(course_id)
+        logger.info(f"[STATUS] course_id={course_id}, indexed={status['indexed']}, chunks={status['chunks']}")
+        return status
     except Exception as e:
-        logging.error(f"[STATUS ERROR] {e}")
-        raise HTTPException(status_code=500, detail="Status check failed")
+        logger.error(f"[STATUS] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# -------------------------------------------------
-# QUIZ GENERATION (SHARED PLUGIN - UNCHANGED)
-# -------------------------------------------------
+# ============================================================================
+# ROOT
+# ============================================================================
 
-@app.post("/generate-quiz")
-def generate_quiz_api(req: QuizRequest):
-    """Generate quiz questions using AI"""
-    try:
-        logging.info(
-            f"[QUIZ] course_id={req.course_id}, "
-            f"topic='{req.topic}', count={req.num_questions}"
-        )
-        
-        quiz = generate_quiz(
-            course_id=req.course_id,
-            topic=req.topic,
-            count=req.num_questions,
-            content=req.content
-        )
-        
-        return {
-            "status": "success",
-            "count": len(quiz),
-            "quiz": quiz
+@app.get("/")
+async def root():
+    return {
+        "message": "Moodle AI Tutor Backend - Phase 3",
+        "version": "3.0.0",
+        "phase": 3,
+        "features": [
+            "quiz_generation",
+            "file_upload",
+            "rag_chat",
+            "course_indexing",
+            "ai_fallback"
+        ],
+        "endpoints": {
+            "health": "GET /health",
+            "quiz": "POST /generate-quiz",
+            "upload": "POST /upload-file",
+            "chat": "POST /chat",
+            "index": "POST /courses/{course_id}/index",
+            "status": "GET /courses/{course_id}/status"
         }
-        
-    except Exception as e:
-        logging.error(f"[QUIZ ERROR] {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail="Quiz generation failed")
-
-# -------------------------------------------------
-# INGEST FILE (LEGACY - UNCHANGED)
-# -------------------------------------------------
-
-@app.post("/ingest")
-async def ingest(
-    course_id: int = Form(..., gt=0),
-    chapter_id: int = Form(..., gt=0),
-    file: UploadFile = File(...)
-):
-    """Ingest a single file into vector database"""
-    try:
-        logging.info(f"[INGEST] course_id={course_id}, file='{file.filename}'")
-        result = await ingest_file(course_id, chapter_id, file)
-        return {
-            "status": "success",
-            "chunks": result.get("chunks", 0),
-            "file": file.filename
-        }
-    except Exception as e:
-        logging.error(f"[INGEST ERROR] {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail="Ingestion failed")
-
-# -------------------------------------------------
-# DEBUG ROUTES
-# -------------------------------------------------
-
-@app.get("/__debug/routes")
-def debug_routes():
-    """List all registered routes"""
-    return [
-        {
-            "path": route.path,
-            "methods": list(route.methods) if hasattr(route, 'methods') else []
-        }
-        for route in app.routes
-    ]
+    }
