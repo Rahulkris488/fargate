@@ -65,7 +65,8 @@ def root():
         "mode": "production",
         "endpoints": {
             "chat": "POST /chat (Phase 2 - Real AI responses)",
-            "chat_test": "POST /chat/test (Phase 1 - Static responses - DEPRECATED)",
+            "chat_test": "POST /chat/test (Phase 1 - DEPRECATED)",
+            "chat_rag": "POST /chat/rag (Phase 3 - Course content RAG)",
             "index": "POST /index",
             "course_status": "GET /course/{id}/status",
             "quiz": "POST /generate-quiz",
@@ -126,10 +127,12 @@ Response:"""
 
         # Get AI response from GROQ
         try:
+            logging.info(f"[CHAT AI] Calling GROQ LLM...")
             answer = llm(prompt)
             logging.info(f"[CHAT AI] ✓ Response generated ({len(answer)} chars)")
         except Exception as e:
             logging.error(f"[CHAT AI ERROR] GROQ failed: {e}")
+            traceback.print_exc()
             # Fallback error message
             return {
                 "success": False,
@@ -155,7 +158,7 @@ Response:"""
         )
 
 # -------------------------------------------------
-# PHASE 1: CHAT TEST (Static - DEPRECATED but kept for compatibility)
+# PHASE 1: CHAT TEST (DEPRECATED)
 # -------------------------------------------------
 
 @app.post("/chat/test")
@@ -168,10 +171,7 @@ async def chat_test(req: ChatRequest):
     try:
         question = req.question.lower().strip()
         
-        logging.info(
-            f"[CHAT TEST - DEPRECATED] Using old endpoint, "
-            f"question='{question}'"
-        )
+        logging.info(f"[CHAT TEST - DEPRECATED] question='{question}'")
         
         # Simple responses
         if any(g in question for g in ['hi', 'hello', 'hey']):
@@ -194,7 +194,7 @@ async def chat_test(req: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 # -------------------------------------------------
-# CHAT RAG - Phase 3+ (Course content search)
+# PHASE 3: CHAT RAG (Course content search)
 # -------------------------------------------------
 
 @app.post("/chat/rag")
