@@ -8,3 +8,6 @@ qdrant-client
 python-dotenv
 numpy
 python-multipart
+requests
+beautifulsoup4
+html2text

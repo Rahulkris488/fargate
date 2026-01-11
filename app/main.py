@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from app.quiz import generate_quiz
 from app.rag import rag_answer, ingest_file, index_course_content, get_course_status
 from app.embeddings import llm
+from app.moodle_extractor import moodle_extractor
 import traceback
 import logging
 
@@ -12,8 +13,8 @@ import logging
 # -------------------------------------------------
 app = FastAPI(
     title="Moodle AI Backend",
-    version="2.0.0-phase2",
-    description="Enterprise AI backend for Moodle - Phase 2: Real AI Chat with GROQ"
+    version="3.0.0-phase3",
+    description="Enterprise AI backend for Moodle - Phase 3: Course Content RAG"
 )
 
 # CORS middleware
@@ -51,6 +52,9 @@ class IndexRequest(BaseModel):
     course_name: str = Field(..., description="Course name")
     documents: list = Field(..., description="List of documents to index")
 
+class CourseIndexRequest(BaseModel):
+    course_id: int = Field(..., gt=0, description="Moodle course ID to index")
+
 # -------------------------------------------------
 # ROOT / HEALTH
 # -------------------------------------------------
@@ -59,56 +63,102 @@ class IndexRequest(BaseModel):
 def root():
     return {
         "message": "Moodle AI Backend is running",
-        "version": "2.0.0-phase2",
+        "version": "3.0.0-phase3",
         "status": "healthy",
-        "phase": "2 - Real AI Chat with GROQ",
+        "phase": "3 - Course Content RAG",
         "mode": "production",
         "endpoints": {
-            "chat": "POST /chat (Phase 2 - Real AI responses)",
-            "chat_test": "POST /chat/test (Phase 1 - DEPRECATED)",
-            "chat_rag": "POST /chat/rag (Phase 3 - Course content RAG)",
-            "index": "POST /index",
-            "course_status": "GET /course/{id}/status",
+            "chat": "POST /chat (Intelligent routing: AI or RAG)",
+            "index_course": "POST /courses/{id}/index (Extract & index course)",
+            "course_status": "GET /courses/{id}/status",
             "quiz": "POST /generate-quiz",
-            "ingest": "POST /ingest"
+            "ingest": "POST /ingest (legacy file upload)"
+        },
+        "features": {
+            "moodle_extraction": moodle_extractor is not None,
+            "rag_enabled": True,
+            "ai_fallback": True,
+            "smart_routing": True
         },
         "phase_info": {
-            "current": "Phase 2 - Real AI Chat",
-            "status": "GROQ AI active - General knowledge Q&A",
-            "next": "Phase 3 - Course Content RAG"
+            "current": "Phase 3 - Course Content RAG",
+            "status": "Full RAG with Moodle integration",
+            "capabilities": [
+                "Automatic course content extraction",
+                "Intelligent RAG search",
+                "AI fallback for non-indexed courses",
+                "Multi-format content support"
+            ]
         }
     }
 
 @app.get("/health")
 def health():
     return {
-        "status": "ok", 
-        "version": "2.0.0-phase2",
-        "phase": 2
+        "status": "ok",
+        "version": "3.0.0-phase3",
+        "phase": 3,
+        "moodle_extractor": "ready" if moodle_extractor else "disabled"
     }
 
 # -------------------------------------------------
-# 🆕 PHASE 2: REAL AI CHAT (GROQ)
+# 🆕 PHASE 3: SMART CHAT (RAG + AI FALLBACK)
 # -------------------------------------------------
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
     """
-    Phase 2: Real AI chat using GROQ
-    Answers any question using AI - no course materials yet
-    Phase 3 will add RAG with course content
+    Phase 3: Intelligent chat with automatic RAG/AI routing
+    
+    - If course is indexed → Use RAG (course-specific answers)
+    - If course not indexed → Use AI (general knowledge)
+    - Seamless experience for students
     """
     try:
         question = req.question.strip()
         
         logging.info(
-            f"[CHAT AI] course_id={req.course_id}, "
+            f"[CHAT] course_id={req.course_id}, "
             f"user_id={req.user_id}, "
             f"course='{req.course_name}', "
             f"question='{question[:100]}...'"
         )
         
-        # Build AI prompt with context
+        # Check if course is indexed
+        status = await get_course_status(req.course_id)
+        is_indexed = status.get("indexed", False)
+        chunk_count = status.get("chunks", 0)
+        
+        if is_indexed and chunk_count > 0:
+            # Use RAG for indexed courses
+            logging.info(
+                f"[CHAT] Using RAG mode (course has {chunk_count} chunks)"
+            )
+            
+            try:
+                answer = await rag_answer(req.course_id, question)
+                
+                return {
+                    "success": True,
+                    "answer": answer,
+                    "mode": "rag",
+                    "phase": 3,
+                    "course_id": req.course_id,
+                    "course_name": req.course_name,
+                    "indexed_chunks": chunk_count,
+                    "model": "groq-llama-3.1-8b"
+                }
+                
+            except Exception as rag_error:
+                # RAG failed, fall back to AI
+                logging.warning(
+                    f"[CHAT] RAG failed, falling back to AI: {rag_error}"
+                )
+                # Continue to AI fallback below
+        
+        # Use AI for non-indexed courses or RAG failures
+        logging.info("[CHAT] Using AI mode (course not indexed or RAG failed)")
+        
         prompt = f"""You are an AI tutor helping a student in the course: "{req.course_name}".
 
 The student asks: {question}
@@ -125,15 +175,13 @@ Guidelines:
 
 Response:"""
 
-        # Get AI response from GROQ
         try:
-            logging.info(f"[CHAT AI] Calling GROQ LLM...")
+            logging.info(f"[CHAT] Calling GROQ LLM...")
             answer = llm(prompt)
-            logging.info(f"[CHAT AI] ✓ Response generated ({len(answer)} chars)")
+            logging.info(f"[CHAT] ✓ Response generated ({len(answer)} chars)")
         except Exception as e:
-            logging.error(f"[CHAT AI ERROR] GROQ failed: {e}")
+            logging.error(f"[CHAT ERROR] GROQ failed: {e}")
             traceback.print_exc()
-            # Fallback error message
             return {
                 "success": False,
                 "error": "AI service temporarily unavailable. Please try again in a moment."
@@ -143,143 +191,153 @@ Response:"""
             "success": True,
             "answer": answer,
             "mode": "ai",
-            "phase": 2,
+            "phase": 3,
             "course_id": req.course_id,
             "course_name": req.course_name,
-            "model": "groq-llama-3.1-8b"
+            "model": "groq-llama-3.1-8b",
+            "note": "Course not indexed yet. Using general AI knowledge."
         }
         
     except Exception as e:
-        logging.error(f"[CHAT AI ERROR] {e}")
+        logging.error(f"[CHAT ERROR] {e}")
         traceback.print_exc()
         raise HTTPException(
-            status_code=500, 
+            status_code=500,
             detail="Chat service error"
         )
 
 # -------------------------------------------------
-# PHASE 1: CHAT TEST (DEPRECATED)
+# 🆕 PHASE 3: INDEX COURSE FROM MOODLE
 # -------------------------------------------------
 
-@app.post("/chat/test")
-async def chat_test(req: ChatRequest):
+@app.post("/courses/{course_id}/index")
+async def index_course_from_moodle(course_id: int):
     """
-    Phase 1: Static test responses (DEPRECATED)
-    Kept for backward compatibility only
-    Use /chat endpoint for real AI
+    Phase 3: Extract and index course content from Moodle
+    
+    This endpoint:
+    1. Connects to Moodle via Web Services
+    2. Extracts all course content (pages, files, etc.)
+    3. Chunks and embeds the content
+    4. Stores in Qdrant vector database
+    
+    Returns progress and statistics
     """
     try:
-        question = req.question.lower().strip()
+        logging.info("\n" + "="*70)
+        logging.info(f"[INDEX COURSE] Starting indexing for course_id={course_id}")
+        logging.info("="*70)
         
-        logging.info(f"[CHAT TEST - DEPRECATED] question='{question}'")
+        # Validate Moodle extractor is available
+        if not moodle_extractor:
+            raise HTTPException(
+                status_code=503,
+                detail="Moodle extractor not configured. Check MOODLE_URL and MOODLE_TOKEN in environment."
+            )
         
-        # Simple responses
-        if any(g in question for g in ['hi', 'hello', 'hey']):
-            answer = f"👋 Hello! I'm your AI Tutor for **{req.course_name}**. Ask me anything!"
-        elif 'help' in question:
-            answer = "I can help with course questions, explanations, and learning. Just ask!"
-        else:
-            answer = f"⚠️ You're using the deprecated test endpoint. Please use the main /chat endpoint for real AI responses."
-
-        return {
+        # Extract course content from Moodle
+        logging.info(f"[INDEX COURSE] Step 1/3: Extracting content from Moodle...")
+        
+        try:
+            documents = moodle_extractor.extract_course_documents(course_id)
+        except ValueError as e:
+            logging.error(f"[INDEX COURSE ERROR] Extraction failed: {e}")
+            raise HTTPException(status_code=404, detail=str(e))
+        except Exception as e:
+            logging.error(f"[INDEX COURSE ERROR] Unexpected extraction error: {e}")
+            traceback.print_exc()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to extract course content: {str(e)}"
+            )
+        
+        # Validate we have content
+        if not documents or len(documents) == 0:
+            logging.warning(f"[INDEX COURSE] No content found for course {course_id}")
+            raise HTTPException(
+                status_code=400,
+                detail="Course has no content to index. Add some content to the course first."
+            )
+        
+        logging.info(
+            f"[INDEX COURSE] ✓ Extracted {len(documents)} documents from Moodle"
+        )
+        
+        # Get course name from first document
+        course_name = documents[0]["metadata"].get(
+            "course_name",
+            f"Course {course_id}"
+        )
+        
+        # Index the content
+        logging.info(f"[INDEX COURSE] Step 2/3: Chunking and embedding content...")
+        
+        try:
+            result = await index_course_content(
+                course_id=course_id,
+                course_name=course_name,
+                documents=documents
+            )
+        except ValueError as e:
+            logging.error(f"[INDEX COURSE ERROR] Indexing failed: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            logging.error(f"[INDEX COURSE ERROR] Unexpected indexing error: {e}")
+            traceback.print_exc()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to index content: {str(e)}"
+            )
+        
+        logging.info(f"[INDEX COURSE] Step 3/3: Storing in vector database...")
+        logging.info(
+            f"[INDEX COURSE] ✓ Successfully indexed {result.get('chunks_indexed', 0)} chunks"
+        )
+        
+        # Build success response
+        response = {
             "success": True,
-            "answer": answer,
-            "mode": "test-deprecated",
-            "phase": 1,
-            "warning": "This endpoint is deprecated. Use /chat for real AI responses."
+            "message": f"Successfully indexed course '{course_name}'",
+            "course_id": course_id,
+            "course_name": course_name,
+            "statistics": {
+                "documents_extracted": len(documents),
+                "chunks_indexed": result.get("chunks_indexed", 0),
+                "total_content_chars": result.get("total_content_chars", 0),
+                "collection": result.get("collection", "")
+            },
+            "document_types": {}
         }
         
-    except Exception as e:
-        logging.error(f"[CHAT TEST ERROR] {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# -------------------------------------------------
-# PHASE 3: CHAT RAG (Course content search)
-# -------------------------------------------------
-
-@app.post("/chat/rag")
-async def chat_rag(req: ChatRequest):
-    """
-    Phase 3+: RAG chat with course content
-    Searches course materials and provides context-aware answers
-    """
-    try:
-        logging.info(
-            f"[CHAT RAG] course_id={req.course_id}, "
-            f"user_id={req.user_id}, "
-            f"question_len={len(req.question)}"
-        )
+        # Count document types
+        for doc in documents:
+            doc_type = doc["type"]
+            response["document_types"][doc_type] = \
+                response["document_types"].get(doc_type, 0) + 1
         
-        answer = await rag_answer(req.course_id, req.question)
-
-        return {
-            "success": True,
-            "answer": answer,
-            "mode": "rag",
-            "phase": 3
-        }
-
-    except ValueError as e:
-        logging.error(f"[CHAT RAG ERROR] ValueError: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    
+        logging.info("\n" + "="*70)
+        logging.info(f"[INDEX COURSE SUCCESS] Course {course_id} indexed successfully!")
+        logging.info(f"[INDEX COURSE] Documents: {len(documents)}")
+        logging.info(f"[INDEX COURSE] Chunks: {result.get('chunks_indexed', 0)}")
+        logging.info("="*70 + "\n")
+        
+        return response
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        logging.error(f"[CHAT RAG ERROR] {e}")
+        logging.error(f"[INDEX COURSE ERROR] Unexpected error: {e}")
         traceback.print_exc()
         raise HTTPException(
-            status_code=500, 
-            detail="RAG service temporarily unavailable"
-        )
-
-# -------------------------------------------------
-# INDEX COURSE CONTENT
-# -------------------------------------------------
-
-@app.post("/index")
-async def index_course(req: IndexRequest):
-    """
-    Index course content into vector database for RAG
-    """
-    try:
-        logging.info(
-            f"[INDEX] course_id={req.course_id}, "
-            f"course_name='{req.course_name}', "
-            f"documents={len(req.documents)}"
-        )
-        
-        if not req.documents or len(req.documents) == 0:
-            raise ValueError("No documents provided to index")
-        
-        result = await index_course_content(
-            course_id=req.course_id,
-            course_name=req.course_name,
-            documents=req.documents
-        )
-        
-        logging.info(
-            f"[INDEX SUCCESS] course_id={req.course_id}, "
-            f"chunks={result.get('chunks_indexed', 0)}"
-        )
-        
-        return result
-        
-    except ValueError as e:
-        logging.error(f"[INDEX ERROR] ValueError: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    
-    except Exception as e:
-        logging.error(f"[INDEX ERROR] Unexpected error: {e}")
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Indexing failed: {str(e)}"
+            status_code=500,
+            detail=f"Course indexing failed: {str(e)}"
         )
 
 # -------------------------------------------------
 # GET COURSE STATUS
 # -------------------------------------------------
 
-@app.get("/course/{course_id}/status")
+@app.get("/courses/{course_id}/status")
 async def course_status(course_id: int):
     """
     Check if a course has been indexed and get statistics
@@ -301,8 +359,53 @@ async def course_status(course_id: int):
         logging.error(f"[STATUS ERROR] {e}")
         traceback.print_exc()
         raise HTTPException(
-            status_code=500, 
+            status_code=500,
             detail="Status check failed"
+        )
+
+# -------------------------------------------------
+# LEGACY: INDEX WITH MANUAL DOCUMENTS
+# -------------------------------------------------
+
+@app.post("/index")
+async def index_course(req: IndexRequest):
+    """
+    Index course content with manually provided documents (legacy)
+    Use /courses/{id}/index for automatic Moodle extraction
+    """
+    try:
+        logging.info(
+            f"[INDEX LEGACY] course_id={req.course_id}, "
+            f"course_name='{req.course_name}', "
+            f"documents={len(req.documents)}"
+        )
+        
+        if not req.documents or len(req.documents) == 0:
+            raise ValueError("No documents provided to index")
+        
+        result = await index_course_content(
+            course_id=req.course_id,
+            course_name=req.course_name,
+            documents=req.documents
+        )
+        
+        logging.info(
+            f"[INDEX LEGACY SUCCESS] course_id={req.course_id}, "
+            f"chunks={result.get('chunks_indexed', 0)}"
+        )
+        
+        return result
+        
+    except ValueError as e:
+        logging.error(f"[INDEX LEGACY ERROR] ValueError: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    except Exception as e:
+        logging.error(f"[INDEX LEGACY ERROR] Unexpected error: {e}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Indexing failed: {str(e)}"
         )
 
 # -------------------------------------------------
@@ -352,7 +455,7 @@ def generate_quiz_api(req: QuizRequest):
         )
 
 # -------------------------------------------------
-# INGEST FILE
+# INGEST FILE (LEGACY)
 # -------------------------------------------------
 
 @app.post("/ingest")
@@ -362,7 +465,7 @@ async def ingest(
     file: UploadFile = File(...)
 ):
     """
-    Ingest a single file into the vector database
+    Ingest a single file into the vector database (legacy)
     """
     try:
         logging.info(
