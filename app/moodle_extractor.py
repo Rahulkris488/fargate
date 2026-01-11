@@ -174,9 +174,14 @@ class MoodleExtractor:
             List of documents with structure:
             {
                 "type": "page|file|forum|section",
-                "source": "Display name or filename",
                 "content": "Actual text content",
-                "metadata": {...}
+                "metadata": {
+                    "course_id": int,
+                    "course_name": str,
+                    "section_name": str,
+                    "module_name": str,
+                    ...
+                }
             }
         """
         logger.info("\n" + "="*70)
@@ -207,19 +212,19 @@ class MoodleExtractor:
             
             # Add section summary as a document (if not empty)
             if section_summary and len(section_summary.strip()) > 50:
-                # Clean HTML tags (basic cleaning)
+                # Clean HTML tags
                 clean_summary = self._clean_html(section_summary)
                 
                 if clean_summary.strip():
                     documents.append({
                         "type": "section",
-                        "source": f"{section_name} - Overview",
                         "content": f"Section: {section_name}\n\n{clean_summary}",
                         "metadata": {
                             "section_id": section.get("id"),
                             "section_name": section_name,
                             "course_id": course_id,
-                            "course_name": course_name
+                            "course_name": course_name,
+                            "source": f"Section: {section_name}"
                         }
                     })
                     logger.info(f"[EXTRACT] ✓ Section summary: {section_name}")
@@ -250,12 +255,6 @@ class MoodleExtractor:
                     doc = self._extract_label_module(module, course_id, course_name, section_name)
                     if doc:
                         documents.append(doc)
-                
-                # Forums disabled by default (can be noisy)
-                elif module_type == "forum" and self.extract_forums:
-                    # Forum extraction would go here
-                    # Skipping for now as it requires additional API calls
-                    pass
         
         logger.info("\n" + "="*70)
         logger.info(f"[MOODLE EXTRACT] ✓ Extraction complete!")
@@ -306,14 +305,14 @@ class MoodleExtractor:
         
         return {
             "type": "page",
-            "source": f"{section_name} > {module_name}",
             "content": f"Page: {module_name}\n\n{clean_content}",
             "metadata": {
                 "module_id": module.get("id"),
                 "module_name": module_name,
                 "section_name": section_name,
                 "course_id": course_id,
-                "course_name": course_name
+                "course_name": course_name,
+                "source": f"Page: {module_name}"
             }
         }
     
@@ -344,13 +343,12 @@ class MoodleExtractor:
             return None
         
         # For now, we'll add file metadata
-        # TODO: In production, download and extract text from PDFs, docs, etc.
+        # TODO: Download and extract text from PDFs, docs, etc.
         logger.info(f"[EXTRACT] ✓ Resource: {module_name} (file: {filename})")
         
         return {
             "type": "file",
-            "source": f"{section_name} > {module_name}",
-            "content": f"Resource: {module_name}\nFilename: {filename}\n\nNote: This is a file resource. File content extraction can be added in future updates.",
+            "content": f"Resource: {module_name}\nFilename: {filename}\n\nThis is a file resource. File content extraction can be added in future updates.",
             "metadata": {
                 "module_id": module.get("id"),
                 "module_name": module_name,
@@ -359,7 +357,8 @@ class MoodleExtractor:
                 "filesize": filesize,
                 "file_url": file_url,
                 "course_id": course_id,
-                "course_name": course_name
+                "course_name": course_name,
+                "source": f"File: {filename}"
             }
         }
     
@@ -368,7 +367,7 @@ class MoodleExtractor:
         module_name = module.get("name", "Unnamed URL")
         description = module.get("description", "")
         
-        # URLs have external links - we'll just save metadata
+        # URLs have external links
         contents = module.get("contents", [])
         external_url = ""
         
@@ -390,7 +389,6 @@ class MoodleExtractor:
         
         return {
             "type": "url",
-            "source": f"{section_name} > {module_name}",
             "content": content,
             "metadata": {
                 "module_id": module.get("id"),
@@ -398,7 +396,8 @@ class MoodleExtractor:
                 "section_name": section_name,
                 "external_url": external_url,
                 "course_id": course_id,
-                "course_name": course_name
+                "course_name": course_name,
+                "source": f"Link: {module_name}"
             }
         }
     
@@ -419,22 +418,19 @@ class MoodleExtractor:
         
         return {
             "type": "label",
-            "source": f"{section_name} > Label",
             "content": clean_content,
             "metadata": {
                 "module_id": module.get("id"),
                 "section_name": section_name,
                 "course_id": course_id,
-                "course_name": course_name
+                "course_name": course_name,
+                "source": f"Label in {section_name}"
             }
         }
     
     def _clean_html(self, html: str) -> str:
         """
-        Basic HTML tag removal and text cleaning
-        
-        For production, consider using BeautifulSoup or html2text for better cleaning
-        This is a lightweight implementation to avoid additional dependencies
+        Clean HTML tags and decode entities
         
         Args:
             html: HTML string to clean
@@ -470,13 +466,13 @@ class MoodleExtractor:
         html = html.replace('&reg;', '®')
         html = html.replace('&trade;', '™')
         
-        # Decode numeric HTML entities (basic support)
+        # Decode numeric HTML entities
         html = re.sub(r'&#(\d+);', lambda m: chr(int(m.group(1))), html)
         html = re.sub(r'&#x([0-9a-fA-F]+);', lambda m: chr(int(m.group(1), 16)), html)
         
         # Clean up whitespace
-        html = re.sub(r'\s+', ' ', html)  # Multiple spaces to single space
-        html = re.sub(r'\n\s*\n', '\n\n', html)  # Multiple newlines to double newline
+        html = re.sub(r'\s+', ' ', html)
+        html = re.sub(r'\n\s*\n', '\n\n', html)
         html = html.strip()
         
         return html

@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any
 from app.quiz import generate_quiz
 from app.rag import rag_answer, ingest_file, index_course_content, get_course_status
 from app.embeddings import llm
@@ -52,8 +53,8 @@ class IndexRequest(BaseModel):
     course_name: str = Field(..., description="Course name")
     documents: list = Field(..., description="List of documents to index")
 
-class CourseIndexRequest(BaseModel):
-    course_id: int = Field(..., gt=0, description="Moodle course ID to index")
+class MoodleExtractRequest(BaseModel):
+    course_id: int = Field(..., gt=0, description="Moodle course ID")
 
 # -------------------------------------------------
 # ROOT / HEALTH
@@ -69,6 +70,7 @@ def root():
         "mode": "production",
         "endpoints": {
             "chat": "POST /chat (Intelligent routing: AI or RAG)",
+            "moodle_extract": "POST /moodle/extract (Extract from Moodle)",
             "index_course": "POST /courses/{id}/index (Extract & index course)",
             "course_status": "GET /courses/{id}/status",
             "quiz": "POST /generate-quiz",
@@ -204,6 +206,93 @@ Response:"""
         raise HTTPException(
             status_code=500,
             detail="Chat service error"
+        )
+
+# -------------------------------------------------
+# 🆕 PHASE 3: MOODLE EXTRACTION ENDPOINT
+# -------------------------------------------------
+
+@app.post("/moodle/extract")
+async def extract_from_moodle(req: MoodleExtractRequest):
+    """
+    Extract course content from Moodle without indexing
+    
+    This endpoint is used by the admin interface to:
+    1. Extract content from Moodle
+    2. Show preview of what will be indexed
+    3. Return document count and types
+    
+    Does NOT index - just extracts and returns metadata
+    """
+    try:
+        logging.info(f"[MOODLE EXTRACT] Starting for course_id={req.course_id}")
+        
+        # Validate Moodle extractor is available
+        if not moodle_extractor:
+            raise HTTPException(
+                status_code=503,
+                detail="Moodle extractor not configured. Check MOODLE_URL and MOODLE_TOKEN."
+            )
+        
+        # Extract course content
+        try:
+            documents = moodle_extractor.extract_course_documents(req.course_id)
+        except ValueError as e:
+            logging.error(f"[MOODLE EXTRACT ERROR] {e}")
+            raise HTTPException(status_code=404, detail=str(e))
+        except Exception as e:
+            logging.error(f"[MOODLE EXTRACT ERROR] Unexpected: {e}")
+            traceback.print_exc()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Extraction failed: {str(e)}"
+            )
+        
+        # Validate content
+        if not documents or len(documents) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="No content found in course. Add content first."
+            )
+        
+        # Count document types
+        doc_types = {}
+        total_chars = 0
+        
+        for doc in documents:
+            doc_type = doc.get("type", "unknown")
+            doc_types[doc_type] = doc_types.get(doc_type, 0) + 1
+            total_chars += len(doc.get("content", ""))
+        
+        # Get course name
+        course_name = documents[0]["metadata"].get(
+            "course_name",
+            f"Course {req.course_id}"
+        )
+        
+        logging.info(
+            f"[MOODLE EXTRACT] ✓ Extracted {len(documents)} documents "
+            f"({total_chars} chars)"
+        )
+        
+        return {
+            "success": True,
+            "course_id": req.course_id,
+            "course_name": course_name,
+            "document_count": len(documents),
+            "document_types": doc_types,
+            "total_content_chars": total_chars,
+            "message": f"Ready to index {len(documents)} documents from '{course_name}'"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[MOODLE EXTRACT ERROR] Unexpected: {e}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail="Extraction failed"
         )
 
 # -------------------------------------------------
