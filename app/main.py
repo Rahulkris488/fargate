@@ -49,8 +49,17 @@ def health():
 # =====================
 @app.post("/generate-quiz")
 def quiz(req: QuizRequest):
-    return generate_quiz(req.content, req.num_questions, req.difficulty)
-
+    try:
+        quiz = generate_quiz(
+            course_id=req.course_id,
+            topic=req.topic,
+            count=req.num_questions,
+            content=req.content
+        )
+        return {"quiz": quiz}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 # =====================
 # CHAT (FIXED)
 # =====================
