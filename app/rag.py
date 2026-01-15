@@ -1,8 +1,27 @@
 from fastapi import UploadFile
-from qdrant_client.models import Distance, VectorParams, PointStruct
-from app.qdrant_client import client
 from app.embeddings import embed_text, llm
 import logging
+
+logger = logging.getLogger(__name__)
+
+# =========================
+# QDRANT CLIENT (OPTIONAL)
+# =========================
+try:
+    from app.qdrant_client import client
+    QDRANT_AVAILABLE = client is not None
+    
+    if QDRANT_AVAILABLE:
+        from qdrant_client.models import Distance, VectorParams, PointStruct
+        logger.info("[RAG] ✅ Qdrant client available")
+    else:
+        logger.warning("[RAG] ⚠️ Qdrant client is None")
+        
+except Exception as e:
+    logger.warning(f"[RAG] ⚠️ Qdrant not available: {e}")
+    logger.warning("[RAG] Will use AI-only fallback mode")
+    QDRANT_AVAILABLE = False
+    client = None
 
 VECTOR_SIZE = 384  # must match MiniLM
 
@@ -10,6 +29,10 @@ VECTOR_SIZE = 384  # must match MiniLM
 # COLLECTION MANAGEMENT
 # =========================
 def ensure_collection_exists(name: str):
+    """Create Qdrant collection if it doesn't exist"""
+    if not QDRANT_AVAILABLE:
+        raise RuntimeError("Qdrant is not available")
+    
     collections = [c.name for c in client.get_collections().collections]
     if name not in collections:
         client.create_collection(
@@ -19,11 +42,13 @@ def ensure_collection_exists(name: str):
                 distance=Distance.COSINE
             )
         )
+        logger.info(f"[RAG] Created collection: {name}")
 
 # =========================
 # TEXT CHUNKING
 # =========================
 def chunk_text(text, size=1000, overlap=200):
+    """Split text into overlapping chunks"""
     chunks = []
     start = 0
     while start < len(text):
@@ -38,10 +63,18 @@ def chunk_text(text, size=1000, overlap=200):
 # INDEX COURSE CONTENT
 # =========================
 async def index_course_content(course_id, course_name, documents):
+    """
+    Index course documents into Qdrant
+    """
+    if not QDRANT_AVAILABLE:
+        raise RuntimeError("Qdrant is not available. Cannot index content.")
+    
     collection = f"course_{course_id}_chunks"
 
+    # Delete existing collection if it exists
     try:
         client.delete_collection(collection)
+        logger.info(f"[RAG] Deleted existing collection: {collection}")
     except:
         pass
 
@@ -80,6 +113,8 @@ async def index_course_content(course_id, course_name, documents):
         raise ValueError("No valid content to index")
 
     client.upsert(collection_name=collection, points=points)
+    
+    logger.info(f"[RAG] ✅ Indexed {len(points)} chunks for course {course_id}")
 
     return {
         "course_id": course_id,
@@ -93,7 +128,18 @@ async def index_course_content(course_id, course_name, documents):
 # COURSE STATUS
 # =========================
 async def get_course_status(course_id):
+    """Check if a course has been indexed"""
     collection = f"course_{course_id}_chunks"
+    
+    if not QDRANT_AVAILABLE:
+        return {
+            "course_id": course_id,
+            "indexed": False,
+            "chunks": 0,
+            "collection": collection,
+            "message": "Qdrant not available"
+        }
+    
     try:
         info = client.get_collection(collection)
         return {
@@ -111,30 +157,69 @@ async def get_course_status(course_id):
         }
 
 # =========================
-# RAG ANSWER
+# RAG ANSWER (WITH AI FALLBACK)
 # =========================
 async def rag_answer(course_id, question):
+    """
+    Answer question using RAG if available, otherwise AI-only
+    """
+    # If Qdrant not available, use AI-only mode
+    if not QDRANT_AVAILABLE:
+        logger.info(f"[RAG] Using AI-only mode (Qdrant not available)")
+        prompt = f"""
+You are an AI tutor helping a student.
+
+QUESTION:
+{question}
+
+Please provide a clear, helpful answer based on your knowledge.
+"""
+        return llm(prompt)
+    
+    # Try to use RAG
     collection = f"course_{course_id}_chunks"
 
     try:
         client.get_collection(collection)
     except:
-        return "This course has not been indexed yet."
+        # Course not indexed - use AI-only mode
+        logger.info(f"[RAG] Course {course_id} not indexed, using AI-only mode")
+        prompt = f"""
+You are an AI tutor helping a student.
 
-    query_emb = embed_text(question)
-    hits = client.query_points(
-        collection_name=collection,
-        query=query_emb,
-        limit=5
-    ).points
+QUESTION:
+{question}
 
-    if not hits:
-        return "No relevant content found in course materials."
+Please provide a clear, helpful answer based on your knowledge.
+"""
+        return llm(prompt)
 
-    context = "\n\n".join(h.payload["text"] for h in hits)
+    # Query vector database
+    try:
+        query_emb = embed_text(question)
+        hits = client.query_points(
+            collection_name=collection,
+            query=query_emb,
+            limit=5
+        ).points
 
-    prompt = f"""
-You are an AI tutor. Answer ONLY using the course material.
+        if not hits:
+            logger.info(f"[RAG] No relevant content found, using AI-only")
+            prompt = f"""
+You are an AI tutor helping a student.
+
+QUESTION:
+{question}
+
+Please provide a clear, helpful answer.
+"""
+            return llm(prompt)
+
+        # Build context from retrieved chunks
+        context = "\n\n".join(h.payload["text"] for h in hits)
+
+        prompt = f"""
+You are an AI tutor. Answer ONLY using the course material provided below.
 
 COURSE MATERIAL:
 {context}
@@ -144,13 +229,31 @@ QUESTION:
 
 ANSWER:
 """
+        logger.info(f"[RAG] ✅ Using RAG mode with {len(hits)} context chunks")
+        return llm(prompt)
+        
+    except Exception as e:
+        logger.error(f"[RAG ERROR] {e}")
+        prompt = f"""
+You are an AI tutor helping a student.
 
-    return llm(prompt)
+QUESTION:
+{question}
+
+Please provide a clear, helpful answer.
+"""
+        return llm(prompt)
 
 # =========================
 # LEGACY INGEST (QUIZ SAFE)
 # =========================
 async def ingest_file(course_id, chapter_id, file: UploadFile):
+    """
+    Legacy file ingestion endpoint
+    """
+    if not QDRANT_AVAILABLE:
+        raise RuntimeError("Qdrant is not available. Cannot ingest files.")
+    
     collection = f"course_{course_id}_chunks"
     ensure_collection_exists(collection)
 
@@ -168,4 +271,7 @@ async def ingest_file(course_id, chapter_id, file: UploadFile):
         )
 
     client.upsert(collection_name=collection, points=points)
+    
+    logger.info(f"[INGEST] ✅ Ingested {len(points)} chunks for course {course_id}")
+    
     return {"chunks": len(points)}

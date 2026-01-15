@@ -1,9 +1,16 @@
 import os
+from dotenv import load_dotenv
 from groq import Groq
+
+# CRITICAL: Load .env file
+load_dotenv()
 
 class LLMProvider:
     def __init__(self):
-        self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY not found in environment")
+        self.client = Groq(api_key=api_key)
 
     def get_completion(self, prompt: str) -> str:
         response = self.client.chat.completions.create(

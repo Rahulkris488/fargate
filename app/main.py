@@ -1,101 +1,96 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-import logging
+import traceback
 
 from app.quiz import generate_quiz
-from app.rag import (
-    rag_answer,
-    ingest_file,
-    index_course_content,
-    get_course_status
-)
-from app.embeddings import llm
+from app.rag import rag_answer, ingest_file
 
-logging.basicConfig(level=logging.INFO)
-app = FastAPI(title="Moodle AI Backend", version="3.0.0-phase3")
+app = FastAPI(title="Moodle AI Backend")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# =====================
+# --------------------------------------------------
 # MODELS
-# =====================
-class QuizRequest(BaseModel):
-    content: str
-    num_questions: int = 5
-    difficulty: str = "medium"
+# --------------------------------------------------
 
 class ChatRequest(BaseModel):
     course_id: int
     question: str
-    course_name: Optional[str] = None
-    user_id: Optional[int] = None
 
-# =====================
-# HEALTH
-# =====================
+class QuizRequest(BaseModel):
+    course_id: int
+    topic: str
+    num_questions: int = 5
+    content: Optional[str] = None
+
+
+# --------------------------------------------------
+# BASIC ROUTES
+# --------------------------------------------------
+
+@app.get("/")
+def root():
+    return {"message": "Moodle AI Backend is running"}
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "phase": 3}
+    return {"status": "ok"}
 
-# =====================
-# QUIZ (UNCHANGED)
-# =====================
-@app.post("/generate-quiz")
-def quiz(req: QuizRequest):
-    return generate_quiz(req.content, req.num_questions, req.difficulty)
 
-# =====================
-# CHAT (FIXED)
-# =====================
+# --------------------------------------------------
+# CHAT (KEEP SIMPLE FOR NOW)
+# --------------------------------------------------
+
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    question = req.question.strip()
-    course_name = req.course_name or f"course_{req.course_id}"
-
-    status = await get_course_status(req.course_id)
-
-    if status["indexed"]:
-        answer = await rag_answer(req.course_id, question)
+    try:
+        answer = await rag_answer(req.course_id, req.question)
         return {
             "success": True,
-            "response": answer,
-            "mode": "rag"
+            "answer": answer
         }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
-    prompt = f"""
-You are an AI tutor.
 
-Question:
-{question}
+# --------------------------------------------------
+# QUIZ — THIS IS THE CRITICAL PATH
+# --------------------------------------------------
 
-Give a helpful, general explanation.
-"""
-    return {
-        "success": True,
-        "response": llm(prompt),
-        "mode": "ai"
-    }
+@app.post("/generate-quiz")
+def quiz(req: QuizRequest):
+    try:
+        quiz = generate_quiz(
+            course_id=req.course_id,
+            topic=req.topic,
+            count=req.num_questions,
+            content=req.content
+        )
+        return {
+            "success": True,
+            "quiz": quiz
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
-# =====================
-# INDEX COURSE
-# =====================
-@app.post("/courses/{course_id}/index")
-async def index_course(course_id: int):
-    raise HTTPException(
-        status_code=400,
-        detail="Indexing must be triggered via Moodle extractor"
-    )
 
-# =====================
-# STATUS
-# =====================
-@app.get("/courses/{course_id}/status")
-async def status(course_id: int):
-    return await get_course_status(course_id)
+# --------------------------------------------------
+# INGEST (LEGACY, LEAVE AS IS)
+# --------------------------------------------------
+
+@app.post("/ingest")
+async def ingest(
+    course_id: int = Form(...),
+    chapter_id: int = Form(...),
+    file: UploadFile = File(...)
+):
+    try:
+        result = await ingest_file(course_id, chapter_id, file)
+        return {
+            "success": True,
+            "detail": result
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
